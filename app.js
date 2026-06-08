@@ -148,7 +148,7 @@ function handleRoute() {
 
   backBtn.style.display = 'none';
   statsBtn.style.display = '';
-  title.textContent = '🏏 Cricket Kharcha';
+  title.textContent = 'Kharcha';
 
   if (hash === '#/' || hash === '#' || hash === '') {
     document.getElementById('view-home').style.display = '';
@@ -211,17 +211,17 @@ async function loadMatches() {
         <div class="match-card-top">
           <span class="match-card-date">${dateStr}</span>
           <span class="match-card-status ${hasCost ? 'status-locked' : 'status-checkin'}">
-            ${hasCost ? '💰 ' + m.paidCount + '/' + m.playerCount + ' paid' : '📝 ' + m.playerCount + ' players'}
+            ${hasCost ? m.paidCount + '/' + m.playerCount + ' paid' : m.playerCount + ' players'}
           </span>
         </div>
         <div class="match-card-bottom">
-          <span class="match-card-cost">${hasCost ? '₹' + m.totalCost : 'No cost set'}</span>
+          <span class="match-card-cost">${hasCost ? '<span class="match-card-cost-prefix">₹</span>' + m.totalCost : 'No cost set'}</span>
           ${hasCost ? `
             <span class="match-card-progress">
               <span class="progress-bar"><span class="progress-fill" style="width:${pct}%"></span></span>
-              ₹${m.paidAmount} collected
+              <span class="progress-label">₹${m.paidAmount} collected</span>
             </span>
-          ` : `<span class="text-muted">${m.payTo ? 'Pay to: ' + m.payTo : ''}</span>`}
+          ` : `<span class="match-card-meta">${m.payTo ? 'Pay to: ' + m.payTo : ''}</span>`}
         </div>
       </div>
     `;
@@ -279,7 +279,7 @@ async function loadMatch(matchId) {
   body.style.display = '';
 
   // Update page title with date
-  document.getElementById('page-title').textContent = '📅 ' + formatDate(_currentMatch.date);
+  document.getElementById('page-title').textContent = formatDate(_currentMatch.date);
 
   // UPI pay banner — show only when cost is set
   const payBar = document.getElementById('payment-info-bar');
@@ -350,9 +350,9 @@ function renderPlayerList(match) {
   if (players.length === 0) {
     listEl.innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">👥</div>
-        <p>No players yet</p>
-        <p class="text-muted">Type a name above and tap Add</p>
+        <div class="empty-icon ball"></div>
+        <h3>No players yet</h3>
+        <p>Type a name above and tap Add</p>
       </div>`;
     return;
   }
