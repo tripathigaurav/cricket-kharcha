@@ -21,10 +21,19 @@ const WRITE_TOKEN_LEN = 16;
 // Leave empty in git. Optional local-only fallback if you paste Code.gs without running setSheetId().
 const FALLBACK_SHEET_ID = '';
 
+function isValidSheetId(id) {
+  if (!id || typeof id !== 'string') return false;
+  var s = id.trim();
+  if (!s || s === 'undefined' || s === 'null' || s === 'PASTE_YOUR_SHEET_ID' || s === 'YOUR_SHEET_ID') return false;
+  // Google Sheet IDs are alphanumeric + hyphens/underscores, typically 40+ chars
+  return /^[a-zA-Z0-9_-]{20,}$/.test(s);
+}
+
 function getSpreadsheet() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty('SHEET_ID');
-  if (id) return SpreadsheetApp.openById(id);
+  if (isValidSheetId(id)) return SpreadsheetApp.openById(id.trim());
+  if (id) props.deleteProperty('SHEET_ID'); // clear bad value e.g. literal "undefined"
 
   // Container-bound script: opened via Extensions > Apps Script on the sheet
   var active = SpreadsheetApp.getActiveSpreadsheet();
@@ -52,6 +61,9 @@ function getSheetId() {
 
 /** Run once from the editor — stores Sheet ID in Script Properties (not in git). */
 function setSheetId(id) {
+  if (!isValidSheetId(id)) {
+    throw new Error('Invalid Sheet ID. Copy it from your sheet URL: .../d/YOUR_ID/edit');
+  }
   PropertiesService.getScriptProperties().setProperty('SHEET_ID', String(id).trim());
 }
 
