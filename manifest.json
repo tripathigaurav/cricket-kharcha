@@ -1,6 +1,6 @@
 {
-  "name": "Kharcha",
-  "short_name": "Kharcha",
+  "name": "CricTracker",
+  "short_name": "CricTracker",
   "description": "Weekend cricket payment tracker",
   "start_url": "./",
   "display": "standalone",

@@ -1,5 +1,5 @@
 // ============================================================
-// Cricket Payment Tracker — Google Apps Script Backend
+// CricTracker — Google Apps Script Backend
 // ============================================================
 // Deploy as Web App: Execute as "Me", Access "Anyone"
 //
@@ -7,14 +7,89 @@
 // 1. Create a Google Sheet
 // 2. Add 3 tabs: "Matches", "Payments", "Players"
 // 3. Open Extensions > Apps Script, paste this code
-// 4. Set SHEET_ID below to your spreadsheet ID
-// 5. Deploy > New Deployment > Web App > Anyone
-// 6. Copy the deployment URL into app.js API_URL
+// 4. Set FALLBACK_SHEET_ID below (from sheet URL) OR run initializeSheets() from the sheet
+// 5. Set project timezone: File > Project properties > Asia/Kolkata
+// 6. Deploy > New Deployment > Web App > Anyone
+// 7. Copy the deployment URL into config.js
 // ============================================================
 
-const SHEET_ID = '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE';
 const MAX_NAME_LEN = 100;
 const MAX_FIELD_LEN = 200;
+const WRITE_TOKEN_LEN = 16;
+
+// Paste your Sheet ID here as a fallback (safe in Apps Script editor — not in public git).
+// Example: '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE'
+const FALLBACK_SHEET_ID = '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE';
+
+function getSpreadsheet() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('SHEET_ID');
+  if (id) return SpreadsheetApp.openById(id);
+
+  // Container-bound script: opened via Extensions > Apps Script on the sheet
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active) {
+    id = active.getId();
+    props.setProperty('SHEET_ID', id);
+    return active;
+  }
+
+  // Editor / web-app fallback — set FALLBACK_SHEET_ID at top of this file
+  if (FALLBACK_SHEET_ID) {
+    props.setProperty('SHEET_ID', FALLBACK_SHEET_ID);
+    return SpreadsheetApp.openById(FALLBACK_SHEET_ID);
+  }
+
+  throw new Error(
+    'SHEET_ID not set. Set FALLBACK_SHEET_ID at the top of Code.gs, or run setSheetId("your-id"), ' +
+    'or open from the sheet and run initializeSheets().'
+  );
+}
+
+function getSheetId() {
+  return getSpreadsheet().getId();
+}
+
+/** Run once from the editor if this is a standalone script (not opened from a sheet). */
+function setSheetId(id) {
+  PropertiesService.getScriptProperties().setProperty('SHEET_ID', String(id).trim());
+}
+
+function generateWriteToken() {
+  return Utilities.getUuid().replace(/-/g, '').substring(0, WRITE_TOKEN_LEN);
+}
+
+function findMatchRow(matchId, matchData) {
+  var data = matchData || getSheetData('Matches');
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] === matchId) {
+      return {
+        sheetRow: i + 1,
+        data: data[i],
+        writeToken: (data[i][9] || '').toString(),
+        totalCost: Number(data[i][3]) || 0,
+        status: data[i][8]
+      };
+    }
+  }
+  return null;
+}
+
+function validateWriteToken(matchId, token) {
+  var info = findMatchRow(matchId);
+  if (!info) return { ok: false, error: 'Match not found' };
+  var stored = (info.writeToken || '').toString().trim();
+  if (!stored) return { ok: false, error: 'Write token not configured — run backfillWriteTokens() in Apps Script' };
+  var provided = token ? token.toString().trim() : '';
+  if (!provided || provided !== stored) return { ok: false, error: 'Invalid or missing write token' };
+  return { ok: true };
+}
+
+function requireWriteToken(body) {
+  var auth = validateWriteToken(body.matchId, body.writeToken);
+  if (!auth.ok) return auth.error;
+  return null;
+}
 
 // Prevent Google Sheets formula injection (OWASP: injection defence)
 function sanitize(val, maxLen) {
@@ -27,12 +102,59 @@ function sanitize(val, maxLen) {
 }
 
 function getSheet(name) {
-  return SpreadsheetApp.openById(SHEET_ID).getSheetByName(name);
+  return getSpreadsheet().getSheetByName(name);
+}
+
+// Per-request sheet cache — avoids repeated getDataRange() in one API call
+var _req = { ss: null, sheets: {} };
+
+function beginRequest() {
+  _req = { ss: null, sheets: {} };
+}
+
+function getSpreadsheetCached() {
+  if (_req.ss) return _req.ss;
+  _req.ss = getSpreadsheet();
+  return _req.ss;
+}
+
+function getSheetCached(name) {
+  return getSpreadsheetCached().getSheetByName(name);
+}
+
+function getSheetData(name) {
+  if (_req.sheets[name]) return _req.sheets[name];
+  var sheet = getSheetCached(name);
+  if (!sheet) {
+    _req.sheets[name] = [];
+    return _req.sheets[name];
+  }
+  _req.sheets[name] = sheet.getDataRange().getValues();
+  return _req.sheets[name];
+}
+
+function invalidateSheetData(name) {
+  delete _req.sheets[name];
+}
+
+function buildPaymentIndex(paymentData) {
+  var index = {};
+  for (var j = 1; j < paymentData.length; j++) {
+    var matchId = paymentData[j][0];
+    if (!index[matchId]) index[matchId] = { playerCount: 0, paidCount: 0, paidAmount: 0 };
+    index[matchId].playerCount++;
+    if (paymentData[j][4] === true || paymentData[j][4] === 'TRUE') {
+      index[matchId].paidCount++;
+      index[matchId].paidAmount += Number(paymentData[j][3]) || 0;
+    }
+  }
+  return index;
 }
 
 // --- Web App Entry Points ---
 
 function doGet(e) {
+  beginRequest();
   const action = (e.parameter && e.parameter.action) || '';
   let result;
   try {
@@ -60,6 +182,7 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  beginRequest();
   let result;
   try {
     if (!e.postData || !e.postData.contents) throw new Error('Empty request body');
@@ -71,6 +194,9 @@ function doPost(e) {
         break;
       case 'checkIn':
         result = checkIn(body);
+        break;
+      case 'checkInBatch':
+        result = checkInBatch(body);
         break;
       case 'removePlayer':
         result = removePlayer(body);
@@ -115,18 +241,24 @@ function createMatch(body) {
   const payToUPI = sanitize(body.payToUPI, MAX_FIELD_LEN);
   if (!payTo) return { error: 'payTo is required' };
 
-  // Columns: MatchID | Date | CricHeroesURL | TotalCost | PerPlayerCost | PlayerCount | PayTo | PayToUPI | Status
-  sheet.appendRow([matchId, date, '', 0, 0, 0, payTo, payToUPI, 'checkin']);
-  SpreadsheetApp.flush();
+  var writeToken = generateWriteToken();
+  // Columns: MatchID | Date | CricHeroesURL | TotalCost | PerPlayerCost | PlayerCount | PayTo | PayToUPI | Status | WriteToken
+  sheet.appendRow([matchId, date, '', 0, 0, 0, payTo, payToUPI, 'checkin', writeToken]);
+  invalidateSheetData('Matches');
 
-  return { success: true, matchId: matchId };
+  var result = { success: true, matchId: matchId, writeToken: writeToken };
+  if (body.checkInCollector && payTo) {
+    var ci = checkIn({ matchId: matchId, playerName: payTo }, { noLock: true });
+    if (ci.error) result.checkInError = ci.error;
+    else result.checkIn = ci;
+  }
+  return result;
 }
 
 function getMatches() {
-  const matchSheet = getSheet('Matches');
-  const matchData = matchSheet.getDataRange().getValues();
-  const paymentSheet = getSheet('Payments');
-  const paymentData = paymentSheet.getDataRange().getValues();
+  const matchData = getSheetData('Matches');
+  const paymentData = getSheetData('Payments');
+  const payIndex = buildPaymentIndex(paymentData);
 
   if (matchData.length <= 1) return { matches: [] };
 
@@ -135,20 +267,7 @@ function getMatches() {
     const row = matchData[i];
     const matchId = row[0];
     const totalCost = Number(row[3]) || 0;
-
-    // Count players and paid
-    let playerCount = 0;
-    let paidCount = 0;
-    let paidAmount = 0;
-    for (let j = 1; j < paymentData.length; j++) {
-      if (paymentData[j][0] === matchId) {
-        playerCount++;
-        if (paymentData[j][4] === true || paymentData[j][4] === 'TRUE') {
-          paidCount++;
-          paidAmount += Number(paymentData[j][3]) || 0;
-        }
-      }
-    }
+    const stats = payIndex[matchId] || { playerCount: 0, paidCount: 0, paidAmount: 0 };
 
     matches.push({
       matchId: matchId,
@@ -156,12 +275,12 @@ function getMatches() {
       cricheroes: row[2],
       totalCost: totalCost,
       perPlayerCost: Number(row[4]) || 0,
-      playerCount: playerCount,
+      playerCount: stats.playerCount,
       payTo: row[6],
       payToUPI: row[7],
       status: row[8],
-      paidCount: paidCount,
-      paidAmount: paidAmount
+      paidCount: stats.paidCount,
+      paidAmount: stats.paidAmount
     });
   }
 
@@ -176,32 +295,24 @@ function getMatches() {
 function getMatch(matchId) {
   if (!matchId) return { error: 'Missing matchId' };
 
-  const matchSheet = getSheet('Matches');
-  const matchData = matchSheet.getDataRange().getValues();
+  const info = findMatchRow(matchId);
+  if (!info) return { error: 'Match not found' };
 
-  let match = null;
-  for (let i = 1; i < matchData.length; i++) {
-    if (matchData[i][0] === matchId) {
-    match = {
-        matchId: matchData[i][0],
-        date: formatDateStr(matchData[i][1]),
-        cricheroes: matchData[i][2],
-        totalCost: Number(matchData[i][3]) || 0,
-        perPlayerCost: Number(matchData[i][4]) || 0,
-        playerCount: Number(matchData[i][5]) || 0,
-        payTo: matchData[i][6],
-        payToUPI: matchData[i][7],
-        status: matchData[i][8]
-      };
-      break;
-    }
-  }
+  const row = info.data;
+  const match = {
+    matchId: row[0],
+    date: formatDateStr(row[1]),
+    cricheroes: row[2],
+    totalCost: Number(row[3]) || 0,
+    perPlayerCost: Number(row[4]) || 0,
+    playerCount: 0,
+    payTo: row[6],
+    payToUPI: row[7],
+    status: row[8],
+    requiresWriteToken: true
+  };
 
-  if (!match) return { error: 'Match not found' };
-
-  // Get players for this match
-  const paymentSheet = getSheet('Payments');
-  const paymentData = paymentSheet.getDataRange().getValues();
+  const paymentData = getSheetData('Payments');
   const players = [];
 
   for (let j = 1; j < paymentData.length; j++) {
@@ -217,6 +328,7 @@ function getMatch(matchId) {
   }
 
   match.players = players;
+  match.playerCount = players.length;
   match.paidCount = players.filter(function(p) { return p.paid; }).length;
   match.paidAmount = players.filter(function(p) { return p.paid; }).reduce(function(s, p) { return s + p.amountOwed; }, 0);
 
@@ -225,70 +337,153 @@ function getMatch(matchId) {
 
 // --- Check-in ---
 
-function checkIn(body) {
+function checkIn(body, options) {
+  options = options || {};
   const matchId = body.matchId;
   const playerName = sanitize(body.playerName, MAX_NAME_LEN);
 
   if (!matchId || !playerName) return { error: 'Missing matchId or playerName' };
 
-  // Use script lock to prevent concurrent duplicate check-ins (race condition fix)
-  var lock = LockService.getScriptLock();
-  lock.waitLock(8000);
+  var lock = null;
+  if (!options.noLock) {
+    lock = LockService.getScriptLock();
+    lock.waitLock(8000);
+  }
   try {
-    // Verify match exists and read current perPlayerCost
-    const matchSheet = getSheet('Matches');
-    const matchData = matchSheet.getDataRange().getValues();
+    const matchSheet = getSheetCached('Matches');
+    const matchData = getSheetData('Matches');
     let matchRow = -1;
     let currentPerPlayerCost = 0;
+    let totalCost = 0;
     for (let i = 1; i < matchData.length; i++) {
       if (matchData[i][0] === matchId) {
         matchRow = i + 1;
-        currentPerPlayerCost = Number(matchData[i][4]) || 0; // col E = PerPlayerCost
+        totalCost = Number(matchData[i][3]) || 0;
+        currentPerPlayerCost = Number(matchData[i][4]) || 0;
         break;
       }
     }
     if (matchRow === -1) return { error: 'Match not found' };
 
-    // Check for duplicate (case-insensitive)
-    const paymentSheet = getSheet('Payments');
-    const paymentData = paymentSheet.getDataRange().getValues();
+    const paymentSheet = getSheetCached('Payments');
+    const paymentData = getSheetData('Payments');
     for (let j = 1; j < paymentData.length; j++) {
       if (paymentData[j][0] === matchId && paymentData[j][1].toString().toLowerCase() === playerName.toLowerCase()) {
         return { error: 'Player already checked in' };
       }
     }
 
-    // Find or create player in master roster
     const playerId = getOrCreatePlayer(playerName);
-
-    // If match already has a per-player cost, apply it immediately so new player sees correct amount
     const amountOwed = currentPerPlayerCost > 0 ? currentPerPlayerCost : 0;
 
-    // Columns: MatchID | PlayerName | PlayerID | AmountOwed | Paid | PaidTimestamp
     paymentSheet.appendRow([matchId, playerName, playerId, amountOwed, false, '']);
-    SpreadsheetApp.flush();
+    invalidateSheetData('Payments');
 
-    return { success: true, playerName: playerName };
+    if (totalCost > 0) {
+      var split = applySplitToMatch(matchId, matchRow, totalCost, matchSheet, paymentSheet);
+      return { success: true, playerName: playerName, perPlayerCost: split.perPlayerCost, playerCount: split.playerCount, totalCost: totalCost };
+    }
+
+    return { success: true, playerName: playerName, playerCount: countMatchPlayers(matchId) };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+function countMatchPlayers(matchId) {
+  var paymentData = getSheetData('Payments');
+  var count = 0;
+  for (var j = 1; j < paymentData.length; j++) {
+    if (paymentData[j][0] === matchId) count++;
+  }
+  return count;
+}
+
+function checkInBatch(body) {
+  const matchId = body.matchId;
+  const rawNames = body.playerNames;
+
+  if (!matchId || !rawNames || !rawNames.length) return { error: 'Missing matchId or playerNames' };
+  if (rawNames.length > 50) return { error: 'Batch too large (max 50)' };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const matchSheet = getSheetCached('Matches');
+    const matchData = getSheetData('Matches');
+    let matchRow = -1;
+    let totalCost = 0;
+    for (let i = 1; i < matchData.length; i++) {
+      if (matchData[i][0] === matchId) {
+        matchRow = i + 1;
+        totalCost = Number(matchData[i][3]) || 0;
+        break;
+      }
+    }
+    if (matchRow === -1) return { error: 'Match not found' };
+
+    const paymentSheet = getSheetCached('Payments');
+    const paymentData = getSheetData('Payments');
+    const existingLower = {};
+    for (let j = 1; j < paymentData.length; j++) {
+      if (paymentData[j][0] === matchId) {
+        existingLower[paymentData[j][1].toString().toLowerCase()] = true;
+      }
+    }
+
+    const rowsToAdd = [];
+    let added = 0;
+    let skipped = 0;
+
+    for (let n = 0; n < rawNames.length; n++) {
+      const playerName = sanitize(rawNames[n], MAX_NAME_LEN);
+      if (!playerName) continue;
+      const key = playerName.toLowerCase();
+      if (existingLower[key]) {
+        skipped++;
+        continue;
+      }
+      const playerId = getOrCreatePlayer(playerName);
+      rowsToAdd.push([matchId, playerName, playerId, 0, false, '']);
+      existingLower[key] = true;
+      added++;
+    }
+
+    if (rowsToAdd.length > 0) {
+      const startRow = paymentSheet.getLastRow() + 1;
+      paymentSheet.getRange(startRow, 1, startRow + rowsToAdd.length - 1, 6).setValues(rowsToAdd);
+      invalidateSheetData('Payments');
+    }
+
+    const result = { success: true, added: added, skipped: skipped };
+    if (totalCost > 0 && rowsToAdd.length > 0) {
+      const split = applySplitToMatch(matchId, matchRow, totalCost, matchSheet, paymentSheet);
+      result.perPlayerCost = split.perPlayerCost;
+      result.playerCount = split.playerCount;
+      result.totalCost = totalCost;
+    } else if (rowsToAdd.length > 0) {
+      result.playerCount = countMatchPlayers(matchId);
+    }
+    return result;
   } finally {
     lock.releaseLock();
   }
 }
 
 function getOrCreatePlayer(name) {
-  const sheet = getSheet('Players');
-  const data = sheet.getDataRange().getValues();
+  const sheet = getSheetCached('Players');
+  const data = getSheetData('Players');
   const nameLower = name.toLowerCase();
 
   for (let i = 1; i < data.length; i++) {
     if (data[i][1].toString().toLowerCase() === nameLower) {
-      return data[i][0]; // return existing PlayerID
+      return data[i][0];
     }
   }
 
-  // Create new player
   const playerId = generateId();
-  // Columns: PlayerID | Name | CricHeroesProfileID
   sheet.appendRow([playerId, name, '']);
+  invalidateSheetData('Players');
   return playerId;
 }
 
@@ -296,24 +491,81 @@ function getOrCreatePlayer(name) {
 
 function removePlayer(body) {
   const matchId = body.matchId;
-  const playerName = (body.playerName || '').trim();
+  const playerName = sanitize(body.playerName, MAX_NAME_LEN);
 
   if (!matchId || !playerName) return { error: 'Missing matchId or playerName' };
 
-  const paymentSheet = getSheet('Payments');
-  const paymentData = paymentSheet.getDataRange().getValues();
+  var tokenErr = requireWriteToken(body);
+  if (tokenErr) return { error: tokenErr };
 
-  for (let j = paymentData.length - 1; j >= 1; j--) {
-    if (paymentData[j][0] === matchId && paymentData[j][1].toString().toLowerCase() === playerName.toLowerCase()) {
-      paymentSheet.deleteRow(j + 1);
-      return { success: true };
+  var matchInfo = findMatchRow(matchId);
+  if (!matchInfo) return { error: 'Match not found' };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    const matchSheet = getSheetCached('Matches');
+    const paymentSheet = getSheetCached('Payments');
+    const paymentData = getSheetData('Payments');
+    var removed = false;
+
+    for (let j = paymentData.length - 1; j >= 1; j--) {
+      if (paymentData[j][0] === matchId && paymentData[j][1].toString().toLowerCase() === playerName.toLowerCase()) {
+        paymentSheet.deleteRow(j + 1);
+        invalidateSheetData('Payments');
+        removed = true;
+        break;
+      }
     }
-  }
 
-  return { error: 'Player not found in this match' };
+    if (!removed) return { error: 'Player not found in this match' };
+
+    if (matchInfo.totalCost > 0) {
+      var remaining = countMatchPlayers(matchId);
+      if (remaining === 0) {
+        return { success: true, playerName: playerName, playerCount: 0 };
+      }
+      var split = applySplitToMatch(matchId, matchInfo.sheetRow, matchInfo.totalCost, matchSheet, paymentSheet);
+      return {
+        success: true,
+        playerName: playerName,
+        perPlayerCost: split.perPlayerCost,
+        playerCount: split.playerCount,
+        totalCost: matchInfo.totalCost
+      };
+    }
+
+    return { success: true, playerName: playerName };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // --- Lock Match ---
+
+function applySplitToMatch(matchId, matchRow, totalCost, matchSheet, paymentSheet) {
+  const paymentData = getSheetData('Payments');
+  const playerRows = [];
+  for (let j = 1; j < paymentData.length; j++) {
+    if (paymentData[j][0] === matchId) {
+      playerRows.push(j + 1);
+    }
+  }
+  if (playerRows.length === 0) return { perPlayerCost: 0, playerCount: 0 };
+
+  const perPlayerCost = Math.ceil(totalCost / playerRows.length);
+  matchSheet.getRange(matchRow, 4, 1, 3).setValues([[totalCost, perPlayerCost, playerRows.length]]);
+  if (playerRows.length === 1) {
+    paymentSheet.getRange(playerRows[0], 4).setValue(perPlayerCost);
+  } else {
+    paymentSheet.getRangeList(
+      playerRows.map(function(row) { return paymentSheet.getRange(row, 4).getA1Notation(); })
+    ).setValue(perPlayerCost);
+  }
+  invalidateSheetData('Matches');
+  invalidateSheetData('Payments');
+  return { perPlayerCost: perPlayerCost, playerCount: playerRows.length, totalCost: totalCost };
+}
 
 function lockMatch(body) {
   const matchId = body.matchId;
@@ -321,11 +573,14 @@ function lockMatch(body) {
 
   if (!matchId || !totalCost || totalCost <= 0) return { error: 'Missing matchId or invalid totalCost' };
 
+  var tokenErr = requireWriteToken(body);
+  if (tokenErr) return { error: tokenErr };
+
   var lock = LockService.getScriptLock();
   lock.waitLock(8000);
   try {
-    const matchSheet = getSheet('Matches');
-    const matchData = matchSheet.getDataRange().getValues();
+    const matchSheet = getSheetCached('Matches');
+    const matchData = getSheetData('Matches');
     let matchRow = -1;
 
     for (let i = 1; i < matchData.length; i++) {
@@ -336,32 +591,16 @@ function lockMatch(body) {
     }
     if (matchRow === -1) return { error: 'Match not found' };
 
-    // Count players
-    const paymentSheet = getSheet('Payments');
-    const paymentData = paymentSheet.getDataRange().getValues();
-    const playerRows = [];
-    for (let j = 1; j < paymentData.length; j++) {
-      if (paymentData[j][0] === matchId) {
-        playerRows.push(j + 1); // 1-indexed sheet row
-      }
-    }
+    const paymentSheet = getSheetCached('Payments');
+    const split = applySplitToMatch(matchId, matchRow, totalCost, matchSheet, paymentSheet);
+    if (split.playerCount === 0) return { error: 'No players checked in' };
 
-    if (playerRows.length === 0) return { error: 'No players checked in' };
-
-    const perPlayerCost = Math.ceil(totalCost / playerRows.length);
-
-    // Update match row: TotalCost, PerPlayerCost, PlayerCount (no status change — players can always be added)
-    matchSheet.getRange(matchRow, 4).setValue(totalCost);         // TotalCost (col D)
-    matchSheet.getRange(matchRow, 5).setValue(perPlayerCost);     // PerPlayerCost (col E)
-    matchSheet.getRange(matchRow, 6).setValue(playerRows.length); // PlayerCount (col F)
-    SpreadsheetApp.flush();
-
-    // Update each player's AmountOwed
-    for (let k = 0; k < playerRows.length; k++) {
-      paymentSheet.getRange(playerRows[k], 4).setValue(perPlayerCost); // AmountOwed (col D)
-    }
-
-    return { success: true, perPlayerCost: perPlayerCost, playerCount: playerRows.length };
+    return {
+      success: true,
+      perPlayerCost: split.perPlayerCost,
+      playerCount: split.playerCount,
+      totalCost: totalCost
+    };
   } finally {
     lock.releaseLock();
   }
@@ -371,20 +610,24 @@ function lockMatch(body) {
 
 function markPaid(body) {
   const matchId = body.matchId;
-  const playerName = (body.playerName || '').trim();
+  const playerName = sanitize(body.playerName, MAX_NAME_LEN);
   const paid = body.paid !== false; // default to true
 
   if (!matchId || !playerName) return { error: 'Missing matchId or playerName' };
 
-  const paymentSheet = getSheet('Payments');
-  const paymentData = paymentSheet.getDataRange().getValues();
+  var tokenErr = requireWriteToken(body);
+  if (tokenErr) return { error: tokenErr };
+
+  const paymentSheet = getSheetCached('Payments');
+  const paymentData = getSheetData('Payments');
 
   for (let j = 1; j < paymentData.length; j++) {
     if (paymentData[j][0] === matchId && paymentData[j][1].toString().toLowerCase() === playerName.toLowerCase()) {
       const row = j + 1;
-      paymentSheet.getRange(row, 5).setValue(paid);  // Paid (col E)
-      paymentSheet.getRange(row, 6).setValue(paid ? new Date().toISOString() : ''); // PaidTimestamp (col F)
-      return { success: true, paid: paid };
+      const amountOwed = Number(paymentData[j][3]) || 0;
+      paymentSheet.getRange(row, 5, 1, 2).setValues([[paid, paid ? new Date().toISOString() : '']]);
+      invalidateSheetData('Payments');
+      return { success: true, paid: paid, amountOwed: amountOwed, playerName: playerName };
     }
   }
 
@@ -397,35 +640,45 @@ function deleteMatch(body) {
   var matchId = body.matchId;
   if (!matchId) return { error: 'matchId required' };
 
-  var matchSheet = getSheet('Matches');
-  var matchData = matchSheet.getDataRange().getValues();
-  var matchRow = -1;
-  for (var i = 1; i < matchData.length; i++) {
-    if (matchData[i][0] === matchId) {
-      matchRow = i + 1; // 1-indexed
-      break;
+  var tokenErr = requireWriteToken(body);
+  if (tokenErr) return { error: tokenErr };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    var matchSheet = getSheetCached('Matches');
+    var matchData = getSheetData('Matches');
+    var matchRow = -1;
+    for (var i = 1; i < matchData.length; i++) {
+      if (matchData[i][0] === matchId) {
+        matchRow = i + 1;
+        break;
+      }
     }
-  }
-  if (matchRow === -1) return { error: 'Match not found' };
+    if (matchRow === -1) return { error: 'Match not found' };
 
-  matchSheet.deleteRow(matchRow);
+    matchSheet.deleteRow(matchRow);
+    invalidateSheetData('Matches');
 
-  var paymentSheet = getSheet('Payments');
-  var paymentData = paymentSheet.getDataRange().getValues();
-  for (var j = paymentData.length - 1; j >= 1; j--) {
-    if (paymentData[j][0] === matchId) {
-      paymentSheet.deleteRow(j + 1);
+    var paymentSheet = getSheetCached('Payments');
+    var paymentData = getSheetData('Payments');
+    for (var j = paymentData.length - 1; j >= 1; j--) {
+      if (paymentData[j][0] === matchId) {
+        paymentSheet.deleteRow(j + 1);
+      }
     }
-  }
+    invalidateSheetData('Payments');
 
-  return { success: true };
+    return { success: true };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // --- Player Stats ---
 
 function getPlayers() {
-  const paymentSheet = getSheet('Payments');
-  const paymentData = paymentSheet.getDataRange().getValues();
+  const paymentData = getSheetData('Payments');
 
   const stats = {};
 
@@ -574,7 +827,7 @@ function scrapePlayerNames(url) {
 // --- Data Reset Helper (run once from Apps Script editor to wipe test data) ---
 
 function resetAllData() {
-  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ss = getSpreadsheet();
   ['Matches', 'Payments', 'Players'].forEach(function(name) {
     var sheet = ss.getSheetByName(name);
     if (!sheet) return;
@@ -594,14 +847,13 @@ function resetAllData() {
 function deleteMatchesByDate() {
   var DATE_TO_DELETE = '2026-06-08'; // ← change this date, then click Run
 
-  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ss = getSpreadsheet();
   var matchSheet = ss.getSheetByName('Matches');
   var paymentSheet = ss.getSheetByName('Payments');
 
   var matchData = matchSheet.getDataRange().getValues();
   var idsToDelete = [];
 
-  // Collect matching match IDs (scan bottom-up so row deletion doesn't shift indices)
   for (var i = matchData.length - 1; i >= 1; i--) {
     var rowDate = formatDateStr(matchData[i][1]);
     if (rowDate === DATE_TO_DELETE) {
@@ -633,7 +885,7 @@ function deleteMatchesByDate() {
 function deleteMatchById() {
   var MATCH_ID = 'PASTE_MATCH_ID_HERE'; // ← paste the matchId, then click Run
 
-  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ss = getSpreadsheet();
   var matchSheet = ss.getSheetByName('Matches');
   var paymentSheet = ss.getSheetByName('Payments');
 
@@ -667,7 +919,7 @@ function deleteMatchById() {
 // --- Sheet Initialization Helper ---
 
 function initializeSheets() {
-  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ss = getSpreadsheet();
 
   function ensureSheet(name, headers) {
     var sheet = ss.getSheetByName(name);
@@ -686,9 +938,32 @@ function initializeSheets() {
     return sheet;
   }
 
-  ensureSheet('Matches',  ['MatchID', 'Date', 'CricHeroesURL', 'TotalCost', 'PerPlayerCost', 'PlayerCount', 'PayTo', 'PayToUPI', 'Status']);
+  ensureSheet('Matches',  ['MatchID', 'Date', 'CricHeroesURL', 'TotalCost', 'PerPlayerCost', 'PlayerCount', 'PayTo', 'PayToUPI', 'Status', 'WriteToken']);
   ensureSheet('Payments', ['MatchID', 'PlayerName', 'PlayerID', 'AmountOwed', 'Paid', 'PaidTimestamp']);
   ensureSheet('Players',  ['PlayerID', 'Name', 'CricHeroesProfileID']);
 
   Logger.log('Sheets initialized!');
+}
+
+/**
+ * One-shot migration: write a token into any Matches row with an empty WriteToken (col J).
+ * Run from the Apps Script editor BEFORE deploying strict validateWriteToken.
+ * Admins must re-share admin links (?w=) for backfilled matches.
+ */
+function backfillWriteTokens() {
+  var sheet = getSheet('Matches');
+  var data = sheet.getDataRange().getValues();
+  var filled = 0;
+
+  for (var i = 1; i < data.length; i++) {
+    var existing = (data[i][9] || '').toString().trim();
+    if (existing) continue;
+    var token = generateWriteToken();
+    sheet.getRange(i + 1, 10).setValue(token);
+    filled++;
+    Logger.log('Backfilled token for match ' + data[i][0]);
+  }
+
+  Logger.log('backfillWriteTokens: filled ' + filled + ' row(s). Re-share admin ?w= links for those matches.');
+  return { filled: filled };
 }

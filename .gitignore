@@ -1,0 +1,8 @@
+# Local secrets — copy config.example.js to config.js
+config.js
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

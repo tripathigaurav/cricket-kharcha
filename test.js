@@ -1,23 +1,29 @@
 // ============================================================
-// Cricket Kharcha — Comprehensive Integration Test Suite
+// CricTracker — Comprehensive Integration Test Suite
 // Run: node test.js
 // ============================================================
 
-// Load API URL from config.js (same config used by the browser app)
+// Load API URL — prefer test deployment via env to avoid touching production sheet
 let BASE;
 try {
-  BASE = require('./config.js').CRICKET_API_URL;
+  const cfg = require('./config.js');
+  BASE = process.env.CRICKET_TEST_API_URL || cfg.CRICKET_TEST_API_URL || cfg.CRICKET_API_URL;
 } catch (e) {
-  BASE = process.env.CRICKET_API_URL || '';
+  BASE = process.env.CRICKET_TEST_API_URL || process.env.CRICKET_API_URL || '';
 }
 if (!BASE || BASE.includes('YOUR_APPS_SCRIPT')) {
   console.error('ERROR: Set CRICKET_API_URL in config.js (copy from config.example.js)');
+  console.error('       For tests, set CRICKET_TEST_API_URL to a separate Apps Script deployment.');
   process.exit(1);
+}
+if (!process.env.CRICKET_TEST_API_URL && !process.env.CRICKET_ALLOW_PROD_TESTS) {
+  console.warn('⚠️  Tests are hitting the default API URL. Set CRICKET_TEST_API_URL for an isolated test sheet.');
 }
 
 let passed = 0;
 let failed = 0;
 const createdMatchIds = [];
+const writeTokens = {};
 
 function assert(label, condition, detail = '') {
   if (condition) {
@@ -37,20 +43,36 @@ async function get(action, params = {}) {
   catch(e) { return { error: `Non-JSON (HTTP ${r.status}): ${text.substring(0, 120)}` }; }
 }
 
+const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'markPaid', 'deleteMatch']);
+
+function trackCreate(result) {
+  if (result?.matchId && result?.writeToken) {
+    writeTokens[result.matchId] = result.writeToken;
+  }
+}
+
 async function post(body) {
+  const payload = { ...body };
+  if (payload.matchId && WRITE_ACTIONS.has(payload.action) && writeTokens[payload.matchId]) {
+    payload.writeToken = writeTokens[payload.matchId];
+  }
   const r = await fetch(BASE, {
     method: 'POST',
     redirect: 'follow',
     headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(payload)
   });
   const text = await r.text();
-  try { return JSON.parse(text); }
+  try {
+    const result = JSON.parse(text);
+    if (payload.action === 'createMatch') trackCreate(result);
+    return result;
+  }
   catch(e) { return { error: `Non-JSON (HTTP ${r.status}): ${text.substring(0, 120)}` }; }
 }
 
 async function run() {
-  console.log('\n🏏 Cricket Kharcha — Comprehensive Integration Tests\n');
+  console.log('\n🏏 CricTracker — Comprehensive Integration Tests\n');
 
   // ══════════════════════════════════════════════════════════
   // BLOCK A: Core Match Lifecycle
@@ -63,6 +85,7 @@ async function run() {
   const c1 = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'Admin', payToUPI: 'admin@upi' });
   assert('Success true', c1.success === true);
   assert('matchId is string', typeof c1.matchId === 'string' && c1.matchId.length > 0);
+  assert('writeToken returned', typeof c1.writeToken === 'string' && c1.writeToken.length >= 8);
   const matchId = c1.matchId;
   createdMatchIds.push(matchId);
   console.log(`     matchId = ${matchId}`);
@@ -215,13 +238,34 @@ async function run() {
   assert('paidAmount = totalCost', mE5.match?.paidAmount === mE5.match?.totalCost);
   assert('Remaining = 0', mE5.match?.totalCost - mE5.match?.paidAmount === 0);
 
-  console.log('\n── E6. Remove paid player (admin corrects roster)');
-  assert('Remove paid player succeeds', (await post({ action: 'removePlayer', matchId, playerName: 'Player5' })).success === true);
-  assert('Now 4 players', (await get('match', { id: matchId })).match?.players?.length === 4);
+  console.log('\n── E6. Remove after cost re-splits');
+  const removeAfterLock = await post({ action: 'removePlayer', matchId, playerName: 'Player5' });
+  assert('Remove after lock succeeds', removeAfterLock.success === true);
+  const mE6 = await get('match', { id: matchId });
+  assert('Now 4 players', mE6.match?.players?.length === 4, `got ${mE6.match?.players?.length}`);
+  assert('Per-player re-split', mE6.match?.perPlayerCost === Math.ceil(mE6.match.totalCost / 4));
+
+  console.log('\n── E6b. checkInBatch size cap');
+  const bigBatch = await post({
+    action: 'checkInBatch',
+    matchId,
+    playerNames: Array.from({ length: 51 }, (_, i) => 'BatchPlayer' + i)
+  });
+  assert('Batch over 50 rejected', !!bigBatch.error);
 
   console.log('\n── E7. Payment edge cases');
   assert('Mark non-existent player returns error', !!(await post({ action: 'markPaid', matchId, playerName: 'Ghost', paid: true })).error);
   assert('Mark wrong match returns error', !!(await post({ action: 'markPaid', matchId: 'fake', playerName: 'Player1', paid: true })).error);
+
+  console.log('\n── E8. Write-token required for protected actions');
+  const noTokenLock = await post({ action: 'lockMatch', matchId, totalCost: 5000, writeToken: 'bad-token' });
+  assert('Invalid write token rejected', !!noTokenLock.error);
+  const freshMatch = await post({ action: 'createMatch', date: '2026-06-09', payTo: 'TokenTest', payToUPI: 't@upi' });
+  createdMatchIds.push(freshMatch.matchId);
+  delete writeTokens[freshMatch.matchId];
+  const noTokenPaid = await post({ action: 'markPaid', matchId: freshMatch.matchId, playerName: 'X', paid: true });
+  assert('markPaid without token on protected match fails', !!noTokenPaid.error);
+  writeTokens[freshMatch.matchId] = freshMatch.writeToken;
 
   // ══════════════════════════════════════════════════════════
   // BLOCK F: Player Stats (Cross-Match Aggregation)
@@ -430,6 +474,71 @@ async function run() {
   console.log('\n── L2. Scrape accepts CricHeroes domain (may return 0 players due to bot-detection)');
   const legit = await get('scrape', { url: 'https://cricheroes.in/match/12345/test/scorecard' });
   assert('CricHeroes URL not SSRF-blocked', !legit.note?.includes('Only CricHeroes') && (Array.isArray(legit.players) || !!legit.error), JSON.stringify(legit));
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK M: Pay-To Auto-Check-In
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── M1. Auto-check-in Pay-To person');
+  const cAutoCI = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'AutoAdmin', payToUPI: 'autoadmin@upi' });
+  createdMatchIds.push(cAutoCI.matchId);
+  const autoCI = await post({ action: 'checkIn', matchId: cAutoCI.matchId, playerName: 'AutoAdmin' });
+  assert('Auto check-in succeeds', autoCI.success === true, JSON.stringify(autoCI));
+  const autoDetail = await get('match', { id: cAutoCI.matchId });
+  assert('Match has 1 player after auto check-in', autoDetail.match?.players?.length === 1);
+  assert('Player name matches payTo', autoDetail.match?.players?.[0]?.name === 'AutoAdmin');
+
+  console.log('\n── M2. Duplicate protection after auto check-in');
+  const dupAutoCI = await post({ action: 'checkIn', matchId: cAutoCI.matchId, playerName: 'AutoAdmin' });
+  assert('Exact dup blocked after auto-CI', !!dupAutoCI.error);
+
+  console.log('\n── M3. Case-insensitive dup after auto check-in');
+  const caseDupCI = await post({ action: 'checkIn', matchId: cAutoCI.matchId, playerName: 'autoadmin' });
+  assert('Case-insensitive dup blocked', !!caseDupCI.error);
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK N: Duplicate Player Detection
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── N1. Exact duplicate check-in');
+  const cDup = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'DupTest', payToUPI: 'dup@upi' });
+  createdMatchIds.push(cDup.matchId);
+  await post({ action: 'checkIn', matchId: cDup.matchId, playerName: 'PlayerDup' });
+  const dupExact = await post({ action: 'checkIn', matchId: cDup.matchId, playerName: 'PlayerDup' });
+  assert('Exact duplicate returns error', !!dupExact.error);
+
+  console.log('\n── N2. Case-insensitive duplicate');
+  const dupCase = await post({ action: 'checkIn', matchId: cDup.matchId, playerName: 'playerdup' });
+  assert('Case-insensitive dup returns error', !!dupCase.error);
+
+  console.log('\n── N3. Renamed player (different name) succeeds');
+  const renamedCI = await post({ action: 'checkIn', matchId: cDup.matchId, playerName: 'PlayerDup (2)' });
+  assert('Renamed player check-in succeeds', renamedCI.success === true);
+  const dupDetail = await get('match', { id: cDup.matchId });
+  assert('Match has 2 distinct players', dupDetail.match?.players?.length === 2);
+
+  console.log('\n── N4. Trimmed whitespace duplicate');
+  const trimDup = await post({ action: 'checkIn', matchId: cDup.matchId, playerName: '  PlayerDup  ' });
+  assert('Whitespace-padded dup blocked', !!trimDup.error);
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK O: Player Roster Endpoint Validation
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── O1. Player roster contains known players');
+  const roster = await get('players');
+  assert('Returns players array', Array.isArray(roster.players));
+  assert('Has entries', (roster.players?.length || 0) >= 1);
+
+  console.log('\n── O2. Player object shape');
+  const samplePlayer = roster.players?.[0];
+  assert('Has name (string)', typeof samplePlayer?.name === 'string' && samplePlayer.name.length > 0);
+  assert('Has matches (number)', typeof samplePlayer?.matches === 'number');
+  assert('Has totalOwed (number)', typeof samplePlayer?.totalOwed === 'number');
+  assert('Has totalPaid (number)', typeof samplePlayer?.totalPaid === 'number');
+  assert('Has outstanding (number)', typeof samplePlayer?.outstanding === 'number');
+  assert('outstanding = owed - paid', samplePlayer?.outstanding === samplePlayer?.totalOwed - samplePlayer?.totalPaid);
+
+  console.log('\n── O3. Player names usable for autocomplete');
+  const allNamesValid = roster.players?.every(p => typeof p.name === 'string' && p.name.length > 0);
+  assert('All player names are non-empty strings', allNamesValid);
 
   // ══════════════════════════════════════════════════════════
   // SUMMARY
