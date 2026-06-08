@@ -487,33 +487,43 @@ async function loadStats() {
   }
 
   tableWrap.innerHTML = `
-    <table class="stats-table">
-      <thead>
-        <tr>
-          <th onclick="sortStats('name')">Player</th>
-          <th onclick="sortStats('matches')">#</th>
-          <th onclick="sortStats('totalOwed')">Owed</th>
-          <th onclick="sortStats('totalPaid')">Paid</th>
-          <th onclick="sortStats('outstanding')">Due</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${players.map(p => `
-          <tr>
-            <td>${escapeHtml(p.name)}</td>
-            <td>${p.matches}</td>
-            <td>₹${p.totalOwed}</td>
-            <td>₹${p.totalPaid}</td>
-            <td class="${p.outstanding > 0 ? 'outstanding-positive' : 'outstanding-zero'}">
-              ₹${p.outstanding}
-            </td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>`;
+    <div class="stats-sort-bar">
+      <span class="stats-sort-label">Sort:</span>
+      <button class="stats-sort-btn active" id="ssb-matches" onclick="sortStats('matches')">Games</button>
+      <button class="stats-sort-btn" id="ssb-outstanding" onclick="sortStats('outstanding')">Due ↑</button>
+      <button class="stats-sort-btn" id="ssb-totalOwed" onclick="sortStats('totalOwed')">Owed</button>
+      <button class="stats-sort-btn" id="ssb-name" onclick="sortStats('name')">A–Z</button>
+    </div>
+    <div class="stats-cards" id="stats-cards-body">
+      ${players.map(p => renderStatCard(p)).join('')}
+    </div>`;
 
-  // Store for sorting
   window._statsPlayers = players;
+}
+
+function renderStatCard(p) {
+  const dueClass = p.outstanding > 0 ? 'due-positive' : 'due-zero';
+  return `
+    <div class="stat-card">
+      <div class="stat-card-top">
+        <span class="stat-name">${escapeHtml(p.name)}</span>
+        <span class="stat-games">${p.matches} game${p.matches !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="stat-card-nums">
+        <div class="stat-num">
+          <span class="stat-num-label">Owed</span>
+          <span class="stat-num-val">₹${p.totalOwed}</span>
+        </div>
+        <div class="stat-num">
+          <span class="stat-num-label">Paid</span>
+          <span class="stat-num-val paid-val">₹${p.totalPaid}</span>
+        </div>
+        <div class="stat-num">
+          <span class="stat-num-label">Due</span>
+          <span class="stat-num-val ${dueClass}">₹${p.outstanding}</span>
+        </div>
+      </div>
+    </div>`;
 }
 
 let _statsSortKey = 'matches';
@@ -527,6 +537,11 @@ function sortStats(key) {
     _statsSortAsc = key === 'name';
   }
 
+  // Update active button
+  document.querySelectorAll('.stats-sort-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('ssb-' + key);
+  if (btn) btn.classList.add('active');
+
   const players = window._statsPlayers || [];
   players.sort((a, b) => {
     let va = a[key], vb = b[key];
@@ -536,21 +551,8 @@ function sortStats(key) {
     return _statsSortAsc ? va - vb : vb - va;
   });
 
-  // Re-render table body
-  const tbody = document.querySelector('.stats-table tbody');
-  if (tbody) {
-    tbody.innerHTML = players.map(p => `
-      <tr>
-        <td>${escapeHtml(p.name)}</td>
-        <td>${p.matches}</td>
-        <td>₹${p.totalOwed}</td>
-        <td>₹${p.totalPaid}</td>
-        <td class="${p.outstanding > 0 ? 'outstanding-positive' : 'outstanding-zero'}">
-          ₹${p.outstanding}
-        </td>
-      </tr>
-    `).join('');
-  }
+  const body = document.getElementById('stats-cards-body');
+  if (body) body.innerHTML = players.map(p => renderStatCard(p)).join('');
 }
 
 // --- Share ---
