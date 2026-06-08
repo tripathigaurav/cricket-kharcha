@@ -547,6 +547,83 @@ function resetAllData() {
   Logger.log('✅ All test data cleared. Sheets are empty and ready for real use.');
 }
 
+// --- Delete matches by date (run from Apps Script editor) ---
+// Usage: change the date string below, then Run this function.
+// Deletes ALL matches on that date and their payment rows.
+
+function deleteMatchesByDate() {
+  var DATE_TO_DELETE = '2026-06-08'; // ← change this date, then click Run
+
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var matchSheet = ss.getSheetByName('Matches');
+  var paymentSheet = ss.getSheetByName('Payments');
+
+  var matchData = matchSheet.getDataRange().getValues();
+  var idsToDelete = [];
+
+  // Collect matching match IDs (scan bottom-up so row deletion doesn't shift indices)
+  for (var i = matchData.length - 1; i >= 1; i--) {
+    var rowDate = formatDateStr(matchData[i][1]);
+    if (rowDate === DATE_TO_DELETE) {
+      idsToDelete.push(matchData[i][0]);
+      matchSheet.deleteRow(i + 1);
+      Logger.log('Deleted match row: ' + matchData[i][0] + ' (' + rowDate + ')');
+    }
+  }
+
+  if (idsToDelete.length === 0) {
+    Logger.log('No matches found for date: ' + DATE_TO_DELETE);
+    return;
+  }
+
+  // Delete payment rows for those match IDs
+  var paymentData = paymentSheet.getDataRange().getValues();
+  for (var j = paymentData.length - 1; j >= 1; j--) {
+    if (idsToDelete.indexOf(paymentData[j][0]) !== -1) {
+      paymentSheet.deleteRow(j + 1);
+    }
+  }
+
+  Logger.log('✅ Deleted ' + idsToDelete.length + ' match(es) for ' + DATE_TO_DELETE + ' and all their payment rows.');
+}
+
+// --- Delete a single match by ID (run from Apps Script editor) ---
+// Usage: set MATCH_ID below to the ID shown in the app URL, then Run.
+
+function deleteMatchById() {
+  var MATCH_ID = 'PASTE_MATCH_ID_HERE'; // ← paste the matchId, then click Run
+
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var matchSheet = ss.getSheetByName('Matches');
+  var paymentSheet = ss.getSheetByName('Payments');
+
+  var matchData = matchSheet.getDataRange().getValues();
+  var deleted = false;
+  for (var i = matchData.length - 1; i >= 1; i--) {
+    if (matchData[i][0] === MATCH_ID) {
+      matchSheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    Logger.log('Match not found: ' + MATCH_ID);
+    return;
+  }
+
+  var paymentData = paymentSheet.getDataRange().getValues();
+  var pDeleted = 0;
+  for (var j = paymentData.length - 1; j >= 1; j--) {
+    if (paymentData[j][0] === MATCH_ID) {
+      paymentSheet.deleteRow(j + 1);
+      pDeleted++;
+    }
+  }
+
+  Logger.log('✅ Deleted match ' + MATCH_ID + ' and ' + pDeleted + ' payment row(s).');
+}
+
 // --- Sheet Initialization Helper ---
 
 function initializeSheets() {
