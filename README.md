@@ -45,7 +45,11 @@ No build step, no npm, no framework — static HTML/JS/CSS + Apps Script.
 1. In the Sheet: **Extensions → Apps Script**
 2. Paste the contents of `Code.gs`
 3. **File → Project properties → Script properties** — set timezone to **Asia/Kolkata**
-4. Run `setSheetId('YOUR_SHEET_ID')` once in the editor (stores ID securely, not in git)
+4. **Store Sheet ID in Script Properties (required)** — never put a real ID in `Code.gs` in git:
+   - In the editor, edit `configureSheetId()` → replace `PASTE_YOUR_SHEET_ID` with your ID → **Run** once  
+   - Or run `setSheetId('YOUR_SHEET_ID')` from the editor console  
+   - Verify: **Project settings → Script properties** shows `SHEET_ID`  
+   - `FALLBACK_SHEET_ID` in the repo stays `''`; production uses Script Properties only
 5. Run `initializeSheets()` once to create headers (includes `WriteToken` column)
 6. **Deploy → New Deployment → Web App**
    - Execute as: **Me**
@@ -127,7 +131,16 @@ test.js           # Integration test suite
 - **Concurrency** — `LockService` on check-in, lock, remove, delete
 - **Input limits** — player names ≤ 100 chars, other fields ≤ 200 chars
 - **XSS** — all user content HTML-escaped before rendering
-- **Secrets** — `config.js` and sheet ID live outside git (Script Properties)
+- **Secrets** — `config.js` is gitignored; Sheet ID lives in Apps Script **Script Properties** (`setSheetId`), not in `Code.gs`
+- **Sheet sharing** — the Sheet ID alone does not grant access, but if it was ever committed, tighten Google Sheet sharing to specific people only (not “anyone with the link” unless you accept that risk)
+
+### Sheet ID and git history
+
+If a real Sheet ID was pushed to GitHub in an older commit, removing it from the latest `Code.gs` only protects **future** clones. Options:
+
+1. **Recommended:** Restrict sheet sharing to trusted accounts; run `setSheetId()` in Apps Script so the live app does not depend on `FALLBACK_SHEET_ID`
+2. **Optional:** Use [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) to purge the ID string from all commits, then `git push --force` (rewrites history)
+3. **Strict:** Create a new Google Sheet, migrate data, run `setSheetId()` with the new ID
 
 ---
 

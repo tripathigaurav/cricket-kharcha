@@ -7,7 +7,8 @@
 // 1. Create a Google Sheet
 // 2. Add 3 tabs: "Matches", "Payments", "Players"
 // 3. Open Extensions > Apps Script, paste this code
-// 4. Set FALLBACK_SHEET_ID below (from sheet URL) OR run initializeSheets() from the sheet
+// 4. Run setSheetId('YOUR_SHEET_ID') once in the editor (stores in Script Properties — do not commit ID to git)
+//    FALLBACK_SHEET_ID in this file stays empty in the public repo.
 // 5. Set project timezone: File > Project properties > Asia/Kolkata
 // 6. Deploy > New Deployment > Web App > Anyone
 // 7. Copy the deployment URL into config.js
@@ -17,9 +18,8 @@ const MAX_NAME_LEN = 100;
 const MAX_FIELD_LEN = 200;
 const WRITE_TOKEN_LEN = 16;
 
-// Paste your Sheet ID here as a fallback (safe in Apps Script editor — not in public git).
-// Example: '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE'
-const FALLBACK_SHEET_ID = '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE';
+// Leave empty in git. Optional local-only fallback if you paste Code.gs without running setSheetId().
+const FALLBACK_SHEET_ID = '';
 
 function getSpreadsheet() {
   var props = PropertiesService.getScriptProperties();
@@ -41,8 +41,8 @@ function getSpreadsheet() {
   }
 
   throw new Error(
-    'SHEET_ID not set. Set FALLBACK_SHEET_ID at the top of Code.gs, or run setSheetId("your-id"), ' +
-    'or open from the sheet and run initializeSheets().'
+    'SHEET_ID not set. Run setSheetId("your-sheet-id") once in the Apps Script editor, ' +
+    'or open this project from the sheet via Extensions > Apps Script.'
   );
 }
 
@@ -50,9 +50,20 @@ function getSheetId() {
   return getSpreadsheet().getId();
 }
 
-/** Run once from the editor if this is a standalone script (not opened from a sheet). */
+/** Run once from the editor — stores Sheet ID in Script Properties (not in git). */
 function setSheetId(id) {
   PropertiesService.getScriptProperties().setProperty('SHEET_ID', String(id).trim());
+}
+
+/**
+ * One-time setup helper. In the Apps Script editor only:
+ * 1. Replace PASTE_YOUR_SHEET_ID with the ID from your sheet URL
+ * 2. Run this function once
+ * 3. Verify Project settings → Script properties shows SHEET_ID
+ * Do not commit the real ID back to the public git repo.
+ */
+function configureSheetId() {
+  setSheetId('PASTE_YOUR_SHEET_ID');
 }
 
 function generateWriteToken() {
