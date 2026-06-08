@@ -21,6 +21,11 @@ const WRITE_TOKEN_LEN = 16;
 // Example: 'YOUR_SHEET_ID_FROM_THE_SHEET_URL'
 const EDITOR_SHEET_ID = '';
 
+// Optional global admin bypass — set in editor ONLY (e.g. 'admin_009').
+// App URL: .../#/admin_009  or  .../#/match/ID?a=admin_009
+// Leave '' in git. Also storable via Script Properties key ADMIN_BYPASS (configureAdminBypass()).
+const EDITOR_ADMIN_BYPASS = '';
+
 function isValidSheetId(id) {
   if (!id || typeof id !== 'string') return false;
   var s = id.trim();
@@ -76,6 +81,24 @@ function configureSheetId() {
   setSheetId(EDITOR_SHEET_ID);
 }
 
+function getAdminBypassToken() {
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperty('ADMIN_BYPASS');
+  if (stored && stored.toString().trim()) return stored.toString().trim();
+  if (typeof EDITOR_ADMIN_BYPASS === 'string' && EDITOR_ADMIN_BYPASS.trim()) {
+    return EDITOR_ADMIN_BYPASS.trim();
+  }
+  return '';
+}
+
+/** Run once from editor — stores EDITOR_ADMIN_BYPASS in Script Properties. */
+function configureAdminBypass() {
+  if (!EDITOR_ADMIN_BYPASS || !EDITOR_ADMIN_BYPASS.trim()) {
+    throw new Error('Set EDITOR_ADMIN_BYPASS at the top of Code.gs in the Apps Script editor first.');
+  }
+  PropertiesService.getScriptProperties().setProperty('ADMIN_BYPASS', EDITOR_ADMIN_BYPASS.trim());
+}
+
 function generateWriteToken() {
   return Utilities.getUuid().replace(/-/g, '').substring(0, WRITE_TOKEN_LEN);
 }
@@ -100,10 +123,13 @@ function findMatchRow(matchId, matchData) {
 function validateWriteToken(matchId, token) {
   var info = findMatchRow(matchId);
   if (!info) return { ok: false, error: 'Match not found' };
+  var provided = token ? token.toString().trim() : '';
+  if (!provided) return { ok: false, error: 'Invalid or missing write token' };
+  var bypass = getAdminBypassToken();
+  if (bypass && provided === bypass) return { ok: true };
   var stored = (info.writeToken || '').toString().trim();
   if (!stored) return { ok: false, error: 'Write token not configured — run backfillWriteTokens() in Apps Script' };
-  var provided = token ? token.toString().trim() : '';
-  if (!provided || provided !== stored) return { ok: false, error: 'Invalid or missing write token' };
+  if (provided !== stored) return { ok: false, error: 'Invalid or missing write token' };
   return { ok: true };
 }
 

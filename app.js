@@ -46,6 +46,31 @@ function getWriteToken(matchId) {
   }
 }
 
+const ADMIN_BYPASS_KEY = 'admin_bypass';
+
+function storeAdminBypass(token) {
+  if (!token) return;
+  try {
+    sessionStorage.setItem(ADMIN_BYPASS_KEY, token);
+  } catch (e) {}
+}
+
+function getAdminBypass() {
+  try {
+    return sessionStorage.getItem(ADMIN_BYPASS_KEY) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function hasWriteAccess(matchId) {
+  return !!getWriteToken(matchId) || !!getAdminBypass();
+}
+
+function getAuthToken(matchId) {
+  return getWriteToken(matchId) || getAdminBypass();
+}
+
 function storeWriteToken(matchId, token) {
   if (!matchId || !token) return;
   _writeToken = token;
@@ -66,8 +91,13 @@ function parseMatchRoute(hash) {
   const [idPart, query] = rest.split('?');
   const matchId = decodeURIComponent((idPart || '').split('#')[0]);
   let writeToken = null;
-  if (query) writeToken = new URLSearchParams(query).get('w');
-  return { matchId, writeToken };
+  let adminBypass = null;
+  if (query) {
+    const qs = new URLSearchParams(query);
+    writeToken = qs.get('w');
+    adminBypass = qs.get('a');
+  }
+  return { matchId, writeToken, adminBypass };
 }
 
 // --- API Helper ---
@@ -78,7 +108,7 @@ async function api(action, params = {}, method = 'GET') {
   try {
     let payload = { ...params };
     if (method === 'POST' && WRITE_ACTIONS.has(action) && payload.matchId) {
-      const token = payload.writeToken || getWriteToken(payload.matchId);
+      const token = payload.writeToken || getAuthToken(payload.matchId);
       if (token) payload.writeToken = token;
     }
     let resp;
@@ -204,6 +234,11 @@ function handleRoute() {
     document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
     const costField = document.getElementById('new-match-cost');
     if (costField) costField.value = '';
+  } else if (hash.startsWith('#/admin_')) {
+    storeAdminBypass(hash.replace(/^#\//, ''));
+    showToast('Admin mode on — open any match');
+    navigate('#/');
+    return;
   } else if (hash.startsWith('#/match/')) {
     activeView = document.getElementById('view-match');
     activeView.style.display = '';
@@ -211,9 +246,10 @@ function handleRoute() {
     setPageTitle('Match');
     const route = parseMatchRoute(hash);
     currentMatchId = route.matchId;
+    if (route.adminBypass) storeAdminBypass(route.adminBypass);
     if (route.writeToken) {
       storeWriteToken(route.matchId, route.writeToken);
-    } else {
+    } else if (!getAdminBypass()) {
       const stored = getWriteToken(route.matchId);
       if (stored) history.replaceState(null, '', buildMatchHash(route.matchId));
     }
@@ -679,7 +715,7 @@ async function loadMatch(matchId, options = {}) {
 function applyMatchData(match, matchId) {
   _currentMatch = match;
 
-  _canWrite = !match.requiresWriteToken || !!getWriteToken(matchId);
+  _canWrite = !match.requiresWriteToken || hasWriteAccess(matchId);
   applyReadOnlyUI();
 
   setPageTitle(formatDate(match.date));
@@ -953,7 +989,7 @@ function applyServerSplit(match, data) {
 async function resyncSplitIfStale(match, matchId) {
   if (!isSplitStale(match)) return match;
 
-  const canWrite = !match.requiresWriteToken || !!getWriteToken(matchId);
+  const canWrite = !match.requiresWriteToken || hasWriteAccess(matchId);
   const localFix = () => applyExpectedSplit({
     ...match,
     players: match.players.map(p => ({ ...p }))
@@ -1305,9 +1341,9 @@ async function handleDeleteMatch() {
   if (!_canWrite) return showToast('View-only link — cannot delete match', 'error');
   if (!confirm('Delete this match and all player data?\nThis cannot be undone.')) return;
 
-  const token = getWriteToken(currentMatchId);
+  const token = getAuthToken(currentMatchId);
   if (_currentMatch?.requiresWriteToken && !token) {
-    return showToast('Admin link required — open the match you created (with ?w= in URL)', 'error');
+    return showToast('Admin link required — open with ?w= or ?a= in URL', 'error');
   }
 
   const data = await api('deleteMatch', { matchId: currentMatchId, writeToken: token }, 'POST');
