@@ -641,6 +641,7 @@ function skeletonPlayers(count) {
 
 async function loadMatch(matchId, options = {}) {
   const silent = options.silent === true;
+  if (!silent) toggleBulkCheckin(false);
   const gen = _loadGeneration;
   const loading = document.getElementById('match-loading');
   const body = document.getElementById('match-body');
@@ -1172,6 +1173,73 @@ function updateSummary(match) {
   const remaining = Math.max(0, match.totalCost - paidAmount);
   document.getElementById('summary-text').innerHTML =
     `<strong>${paidCount}/${players.length}</strong> paid · <span style="color:var(--warn)">₹${remaining} left</span>`;
+}
+
+// --- Bulk Check In ---
+const BULK_CHECKIN_MAX = 50;
+
+function parseBulkNames(text) {
+  const seen = new Set();
+  const names = [];
+  for (const part of text.split(/[\r\n,;]+/)) {
+    const name = part.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function toggleBulkCheckin(forceOpen) {
+  const panel = document.getElementById('bulk-checkin-panel');
+  const btn = document.getElementById('btn-toggle-bulk-checkin');
+  if (!panel || !btn) return;
+  const open = forceOpen === true ? true : forceOpen === false ? false : panel.style.display === 'none';
+  panel.style.display = open ? '' : 'none';
+  btn.textContent = open ? 'Hide bulk paste' : 'Paste multiple names';
+  if (open) {
+    const ta = document.getElementById('bulk-checkin-names');
+    if (ta) setTimeout(() => ta.focus(), 0);
+  }
+}
+
+async function handleBulkCheckIn() {
+  const ta = document.getElementById('bulk-checkin-names');
+  if (!ta || _checkInPending) return;
+
+  const names = parseBulkNames(ta.value);
+  if (!names.length) return showToast('Paste at least one name', 'error');
+  if (names.length > BULK_CHECKIN_MAX) {
+    return showToast(`Max ${BULK_CHECKIN_MAX} names at once`, 'error');
+  }
+
+  hideSuggestions();
+  _checkInPending = true;
+  ta.disabled = true;
+
+  const data = await api('checkInBatch', { matchId: currentMatchId, playerNames: names }, 'POST');
+
+  ta.disabled = false;
+  _checkInPending = false;
+
+  if (data.error) return showToast(data.error, 'error');
+
+  ta.value = '';
+  names.forEach(addKnownPlayerName);
+  await loadMatch(currentMatchId, { silent: true });
+  invalidateMatchListCache();
+
+  const added = data.added || 0;
+  const skipped = data.skipped || 0;
+  if (added === 0 && skipped > 0) {
+    showToast('Everyone was already on the list', 'error');
+  } else if (skipped > 0) {
+    showToast(`Added ${added} · ${skipped} already on list`);
+  } else {
+    showToast(`Added ${added} player${added === 1 ? '' : 's'}!`);
+  }
 }
 
 // --- Check In ---

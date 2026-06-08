@@ -224,6 +224,12 @@
               <input type="text" id="checkin-name" class="input" placeholder="Type name &amp; press Add" autocomplete="off" maxlength="100">
               <button class="btn btn-primary" onclick="handleCheckIn()">Add</button>
             </div>
+            <button type="button" id="btn-toggle-bulk-checkin" class="btn-bulk-toggle" onclick="toggleBulkCheckin()">Paste multiple names</button>
+            <div id="bulk-checkin-panel" class="bulk-checkin-panel" style="display:none">
+              <textarea id="bulk-checkin-names" class="bulk-checkin-textarea" rows="5" placeholder="Rahul&#10;Vikram, Amit&#10;Suresh"></textarea>
+              <p class="input-hint">One per line or comma-separated · max 50 · duplicates skipped</p>
+              <button type="button" class="btn btn-primary btn-block" onclick="handleBulkCheckIn()">Add all</button>
+            </div>
             <div id="checkin-suggestions" class="suggestions-dropdown" style="display:none"></div>
           </div>
 

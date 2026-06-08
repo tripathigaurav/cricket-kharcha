@@ -538,7 +538,7 @@ function checkInBatch(body) {
 
     if (rowsToAdd.length > 0) {
       const startRow = paymentSheet.getLastRow() + 1;
-      paymentSheet.getRange(startRow, 1, startRow + rowsToAdd.length - 1, 6).setValues(rowsToAdd);
+      paymentSheet.getRange(startRow, 1, rowsToAdd.length, 6).setValues(rowsToAdd);
       invalidateSheetData('Payments');
     }
 

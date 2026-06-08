@@ -296,6 +296,15 @@ async function run() {
   });
   assert('Batch over 50 rejected', !!bigBatch.error);
 
+  console.log('\n── E6c. checkInBatch with existing rows (offset bug)');
+  const batchSmall = await post({
+    action: 'checkInBatch',
+    matchId,
+    playerNames: ['BatchA', 'BatchB']
+  });
+  assert('Batch add 2 succeeds', batchSmall.success === true, JSON.stringify(batchSmall));
+  assert('Batch added 2', batchSmall.added === 2, `added ${batchSmall.added}`);
+
   console.log('\n── E7. Payment edge cases');
   assert('Mark non-existent player returns error', !!(await post({ action: 'markPaid', matchId, playerName: 'Ghost', paid: true })).error);
   assert('Mark wrong match returns error', !!(await post({ action: 'markPaid', matchId: 'fake', playerName: 'Player1', paid: true })).error);
