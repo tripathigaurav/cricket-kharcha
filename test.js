@@ -3,7 +3,17 @@
 // Run: node test.js
 // ============================================================
 
-const BASE = 'https://script.google.com/macros/s/AKfycbyKXOQOsxEcwMQzLagw_VdG1iueTdnqa2JMqcrWzSe8c8kN69iR541FVKmEiyepli3f1w/exec';
+// Load API URL from config.js (same config used by the browser app)
+let BASE;
+try {
+  BASE = require('./config.js').CRICKET_API_URL;
+} catch (e) {
+  BASE = process.env.CRICKET_API_URL || '';
+}
+if (!BASE || BASE.includes('YOUR_APPS_SCRIPT')) {
+  console.error('ERROR: Set CRICKET_API_URL in config.js (copy from config.example.js)');
+  process.exit(1);
+}
 
 let passed = 0;
 let failed = 0;
@@ -430,9 +440,16 @@ async function run() {
   if (failed === 0) console.log('🎉 All tests passed! App is production ready.\n');
   else console.log('⚠️  Some tests failed — see ❌ above.\n');
 
-  console.log('🗑️  Test match IDs to clean from Google Sheet:');
-  createdMatchIds.forEach(id => console.log(`   ${id}`));
-  console.log('   Delete rows with these IDs from Matches + Payments tabs\n');
+  // Auto-cleanup: delete all test matches created during this run
+  console.log(`🗑️  Cleaning up ${createdMatchIds.length} test match(es)...`);
+  let cleaned = 0;
+  for (const id of createdMatchIds) {
+    try {
+      const r = await post({ action: 'deleteMatch', matchId: id });
+      if (r.success) cleaned++;
+    } catch (_) { /* ignore cleanup errors */ }
+  }
+  console.log(`   Deleted ${cleaned}/${createdMatchIds.length} test matches.\n`);
 
   process.exit(failed > 0 ? 1 : 0);
 }

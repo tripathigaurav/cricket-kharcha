@@ -110,7 +110,7 @@ function formatDateStr(val) {
 function createMatch(body) {
   const sheet = getSheet('Matches');
   const matchId = generateId();
-  const date = sanitize(body.date || new Date().toISOString().split('T')[0], 20);
+  const date = sanitize(body.date || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'), 20);
   const payTo = sanitize(body.payTo, MAX_FIELD_LEN);
   const payToUPI = sanitize(body.payToUPI, MAX_FIELD_LEN);
   if (!payTo) return { error: 'payTo is required' };
@@ -321,44 +321,50 @@ function lockMatch(body) {
 
   if (!matchId || !totalCost || totalCost <= 0) return { error: 'Missing matchId or invalid totalCost' };
 
-  const matchSheet = getSheet('Matches');
-  const matchData = matchSheet.getDataRange().getValues();
-  let matchRow = -1;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    const matchSheet = getSheet('Matches');
+    const matchData = matchSheet.getDataRange().getValues();
+    let matchRow = -1;
 
-  for (let i = 1; i < matchData.length; i++) {
-    if (matchData[i][0] === matchId) {
-      matchRow = i + 1;
-      break;
+    for (let i = 1; i < matchData.length; i++) {
+      if (matchData[i][0] === matchId) {
+        matchRow = i + 1;
+        break;
+      }
     }
-  }
-  if (matchRow === -1) return { error: 'Match not found' };
+    if (matchRow === -1) return { error: 'Match not found' };
 
-  // Count players
-  const paymentSheet = getSheet('Payments');
-  const paymentData = paymentSheet.getDataRange().getValues();
-  const playerRows = [];
-  for (let j = 1; j < paymentData.length; j++) {
-    if (paymentData[j][0] === matchId) {
-      playerRows.push(j + 1); // 1-indexed sheet row
+    // Count players
+    const paymentSheet = getSheet('Payments');
+    const paymentData = paymentSheet.getDataRange().getValues();
+    const playerRows = [];
+    for (let j = 1; j < paymentData.length; j++) {
+      if (paymentData[j][0] === matchId) {
+        playerRows.push(j + 1); // 1-indexed sheet row
+      }
     }
+
+    if (playerRows.length === 0) return { error: 'No players checked in' };
+
+    const perPlayerCost = Math.ceil(totalCost / playerRows.length);
+
+    // Update match row: TotalCost, PerPlayerCost, PlayerCount (no status change — players can always be added)
+    matchSheet.getRange(matchRow, 4).setValue(totalCost);         // TotalCost (col D)
+    matchSheet.getRange(matchRow, 5).setValue(perPlayerCost);     // PerPlayerCost (col E)
+    matchSheet.getRange(matchRow, 6).setValue(playerRows.length); // PlayerCount (col F)
+    SpreadsheetApp.flush();
+
+    // Update each player's AmountOwed
+    for (let k = 0; k < playerRows.length; k++) {
+      paymentSheet.getRange(playerRows[k], 4).setValue(perPlayerCost); // AmountOwed (col D)
+    }
+
+    return { success: true, perPlayerCost: perPlayerCost, playerCount: playerRows.length };
+  } finally {
+    lock.releaseLock();
   }
-
-  if (playerRows.length === 0) return { error: 'No players checked in' };
-
-  const perPlayerCost = Math.ceil(totalCost / playerRows.length);
-
-  // Update match row: TotalCost, PerPlayerCost, PlayerCount (no status change — players can always be added)
-  matchSheet.getRange(matchRow, 4).setValue(totalCost);         // TotalCost (col D)
-  matchSheet.getRange(matchRow, 5).setValue(perPlayerCost);     // PerPlayerCost (col E)
-  matchSheet.getRange(matchRow, 6).setValue(playerRows.length); // PlayerCount (col F)
-  SpreadsheetApp.flush();
-
-  // Update each player's AmountOwed
-  for (let k = 0; k < playerRows.length; k++) {
-    paymentSheet.getRange(playerRows[k], 4).setValue(perPlayerCost); // AmountOwed (col D)
-  }
-
-  return { success: true, perPlayerCost: perPlayerCost, playerCount: playerRows.length };
 }
 
 // --- Mark Paid ---

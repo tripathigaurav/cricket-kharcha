@@ -2,9 +2,11 @@
 // Cricket Kharcha — Frontend App
 // ============================================================
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbyKXOQOsxEcwMQzLagw_VdG1iueTdnqa2JMqcrWzSe8c8kN69iR541FVKmEiyepli3f1w/exec';
+// API URL is set in config.js (loaded before this file in index.html)
+// If config.js is missing or has a placeholder, demo mode activates automatically
+const API_URL = (typeof CRICKET_API_URL !== 'undefined') ? CRICKET_API_URL : '';
 
-const IS_DEMO = API_URL.includes('YOUR_APPS_SCRIPT');
+const IS_DEMO = !API_URL || API_URL.includes('YOUR_APPS_SCRIPT');
 
 // --- State ---
 let currentMatchId = null;
@@ -155,7 +157,7 @@ function handleRoute() {
     document.getElementById('view-new').style.display = '';
     backBtn.style.display = '';
     title.textContent = 'New Match';
-    document.getElementById('match-date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('match-date').value = new Date().toLocaleDateString('sv');
   } else if (hash.startsWith('#/match/')) {
     document.getElementById('view-match').style.display = '';
     backBtn.style.display = '';
@@ -236,9 +238,8 @@ async function handleCreateMatch() {
   if (!payTo) return showToast('Please enter who to pay', true);
   if (!payToRaw) return showToast('Please enter a UPI ID or phone number', true);
 
-  // Normalise: if it looks like a 10-digit phone number, convert to phone@upi
-  const isPhone = /^[6-9]\d{9}$/.test(payToRaw);
-  const payToUPI = isPhone ? payToRaw + '@upi' : payToRaw;
+  // Normalise: use UPI ID as-is (9876543210@ybl, name@paytm, etc.)
+  const payToUPI = payToRaw;
 
   const btn = event.target;
   btn.disabled = true;
@@ -366,7 +367,7 @@ function renderPlayerList(match) {
   listEl.innerHTML = sorted.map(p => {
     const canToggle = hasCost;
     return `
-      <div class="player-item ${p.paid && hasCost ? 'paid' : ''}" ${canToggle ? `onclick="togglePaid('${escapeAttr(p.name)}', ${!p.paid})"` : ''}>
+      <div class="player-item ${p.paid && hasCost ? 'paid' : ''}" ${canToggle ? `onclick="togglePaid(this, '${escapeAttr(p.name)}', ${!p.paid})"` : ''}>
         <div class="player-checkbox ${hasCost ? '' : 'checked-in'}">${hasCost ? (p.paid ? '✓' : '') : '✓'}</div>
         <span class="player-name">${escapeHtml(p.name)}</span>
         ${hasCost
@@ -434,8 +435,12 @@ async function handleDeleteMatch() {
 }
 
 // --- Mark Paid ---
-async function togglePaid(playerName, paid) {
+async function togglePaid(el, playerName, paid) {
+  el.style.pointerEvents = 'none';
+  el.style.opacity = '0.5';
   const data = await api('markPaid', { matchId: currentMatchId, playerName, paid }, 'POST');
+  el.style.pointerEvents = '';
+  el.style.opacity = '';
   if (data.error) return showToast(data.error, true);
   loadMatch(currentMatchId);
 }
@@ -453,7 +458,7 @@ async function handleScrape() {
   const data = await api('scrape', { url });
 
   btn.disabled = false;
-  btn.textContent = 'Fetch Players';
+  btn.textContent = 'Fetch';
 
   if (data.error) return showToast(data.error, true);
 
@@ -588,7 +593,8 @@ async function handleShare() {
 
 function formatDate(dateStr) {
   try {
-    const d = new Date(dateStr + 'T00:00:00');
+    // Parse as local noon to avoid UTC midnight shifting date by ±1 day in IST/other TZs
+    const d = new Date(dateStr + 'T12:00:00');
     return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   } catch {
     return dateStr;
