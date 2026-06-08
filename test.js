@@ -173,26 +173,26 @@ async function run() {
   // BLOCK E: Payments
   // ══════════════════════════════════════════════════════════
   console.log('\n── E1. Mark paid');
-  assert('Mark paid succeeds', (await post({ action: 'markPaid', matchId, playerName: 'Shubham', paid: true })).success === true);
+  assert('Mark paid succeeds', (await post({ action: 'markPaid', matchId, playerName: 'Player1', paid: true })).success === true);
   const mE1 = await get('match', { id: matchId });
-  const sub1 = mE1.match?.players?.find(p => p.name === 'Shubham');
+  const sub1 = mE1.match?.players?.find(p => p.name === 'Player1');
   assert('paid = true', sub1?.paid === true);
   assert('Timestamp set', !!sub1?.paidTimestamp);
   assert('paidCount = 1', mE1.match?.paidCount === 1);
   assert('paidAmount = 720', mE1.match?.paidAmount === 720, `got ${mE1.match?.paidAmount}`);
 
   console.log('\n── E2. Multiple paid — running total');
-  await post({ action: 'markPaid', matchId, playerName: 'Prashant', paid: true });
-  await post({ action: 'markPaid', matchId, playerName: 'Adwitiya', paid: true });
+  await post({ action: 'markPaid', matchId, playerName: 'Player2', paid: true });
+  await post({ action: 'markPaid', matchId, playerName: 'Player3', paid: true });
   const mE2 = await get('match', { id: matchId });
   assert('paidCount = 3', mE2.match?.paidCount === 3);
   assert('paidAmount = 2160 (3×720)', mE2.match?.paidAmount === 2160, `got ${mE2.match?.paidAmount}`);
   assert('remaining = 1440 (2×720)', mE2.match?.totalCost - mE2.match?.paidAmount === 1440);
 
   console.log('\n── E3. Unmark paid (toggle off)');
-  await post({ action: 'markPaid', matchId, playerName: 'Shubham', paid: false });
+  await post({ action: 'markPaid', matchId, playerName: 'Player1', paid: false });
   const mE3 = await get('match', { id: matchId });
-  const sub3 = mE3.match?.players?.find(p => p.name === 'Shubham');
+  const sub3 = mE3.match?.players?.find(p => p.name === 'Player1');
   assert('paid toggled to false', sub3?.paid === false);
   assert('Timestamp cleared', sub3?.paidTimestamp === '');
   assert('paidCount back to 2', mE3.match?.paidCount === 2);
