@@ -54,7 +54,7 @@
             <label for="pay-upi">UPI ID or Phone Number</label>
             <input type="text" id="pay-upi" class="input" placeholder="e.g. gaurav@upi or 9876543210" autocomplete="off" maxlength="200">
           </div>
-          <button class="btn btn-primary btn-block" onclick="handleCreateMatch()">Create Match & Get Check-in Link</button>
+          <button class="btn btn-primary btn-block" onclick="handleCreateMatch(this)">Create Match &amp; Get Check-in Link</button>
         </div>
       </section>
 
@@ -83,7 +83,7 @@
               <summary>📥 Import from CricHeroes</summary>
               <div class="import-form">
                 <input type="url" id="cricheroes-url" class="input" placeholder="Paste CricHeroes match URL">
-                <button class="btn btn-secondary" onclick="handleScrape()">Fetch</button>
+                <button class="btn btn-secondary" onclick="handleScrape(this)">Fetch</button>
               </div>
             </details>
           </div>

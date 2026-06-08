@@ -229,7 +229,7 @@ async function loadMatches() {
 }
 
 // --- Create Match ---
-async function handleCreateMatch() {
+async function handleCreateMatch(btn) {
   const date = document.getElementById('match-date').value;
   const payTo = document.getElementById('pay-to').value.trim();
   const payToRaw = document.getElementById('pay-upi').value.trim();
@@ -241,7 +241,6 @@ async function handleCreateMatch() {
   // Normalise: use UPI ID as-is (9876543210@ybl, name@paytm, etc.)
   const payToUPI = payToRaw;
 
-  const btn = event.target;
   btn.disabled = true;
   btn.textContent = 'Creating...';
 
@@ -446,12 +445,11 @@ async function togglePaid(el, playerName, paid) {
 }
 
 // --- CricHeroes Import ---
-async function handleScrape() {
+async function handleScrape(btn) {
   const urlInput = document.getElementById('cricheroes-url');
   const url = urlInput.value.trim();
   if (!url) return showToast('Paste a CricHeroes match URL', true);
 
-  const btn = event.target;
   btn.disabled = true;
   btn.textContent = 'Fetching...';
 

@@ -431,6 +431,7 @@ function getPlayers() {
 
   for (let j = 1; j < paymentData.length; j++) {
     const name = paymentData[j][1].toString();
+    if (!name) continue; // skip rows with blank player name
     const nameLower = name.toLowerCase();
     const amountOwed = Number(paymentData[j][3]) || 0;
     const paid = paymentData[j][4] === true || paymentData[j][4] === 'TRUE';
