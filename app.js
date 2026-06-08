@@ -139,6 +139,10 @@ function navigate(hash) {
 }
 
 function goBack() {
+  goHome();
+}
+
+function goHome() {
   navigate('#/');
 }
 

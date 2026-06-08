@@ -115,10 +115,10 @@
       <button id="btn-back" class="btn-icon" onclick="goBack()" style="display:none" aria-label="Back">
         <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-back"/></svg>
       </button>
-      <div class="top-bar-brand">
+      <button type="button" class="top-bar-brand" onclick="goHome()" aria-label="CricTracker home">
         <svg class="brand-logo" viewBox="0 0 32 32" aria-hidden="true"><use href="#logo-mark"/></svg>
-        <h1 id="page-title"><span id="page-title-text">CricTracker</span></h1>
-      </div>
+        <span id="page-title" class="top-bar-title"><span id="page-title-text">CricTracker</span></span>
+      </button>
       <button id="btn-stats" class="btn-icon" onclick="navigate('#/stats')" title="Player Stats" aria-label="Player Stats">
         <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stats"/></svg>
       </button>

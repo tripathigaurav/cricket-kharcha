@@ -259,14 +259,25 @@ a:hover { color: var(--accent-hover); }
   align-items: center;
   gap: 10px;
   min-width: 0;
+  margin: 0;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-md);
+  -webkit-tap-highlight-color: transparent;
 }
+.top-bar-brand:hover { opacity: 0.9; }
+.top-bar-brand:active { opacity: 0.75; }
 .brand-logo {
   width: 26px;
   height: 26px;
   flex-shrink: 0;
 }
-.top-bar h1,
-.top-bar-brand h1 {
+.top-bar-title {
   flex: 1;
   font-size: 18px;
   font-weight: 700;
