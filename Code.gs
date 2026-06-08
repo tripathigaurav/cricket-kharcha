@@ -18,7 +18,7 @@ const MAX_FIELD_LEN = 200;
 const WRITE_TOKEN_LEN = 16;
 
 // Set your Sheet ID here in the Apps Script editor ONLY — leave '' in the public git repo.
-// Example: '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE'
+// Example: 'YOUR_SHEET_ID_FROM_THE_SHEET_URL'
 const EDITOR_SHEET_ID = '';
 
 function isValidSheetId(id) {
