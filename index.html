@@ -107,7 +107,7 @@
   <div id="app">
     <canvas id="confetti-canvas" style="position:fixed;inset:0;z-index:200;pointer-events:none"></canvas>
     <div id="readonly-banner" class="readonly-banner" style="display:none">
-      View-only — check in only. Ask the admin for the full link.
+      Player link — check in &amp; tap ✓ when you've paid. Admin link needed to edit split.
     </div>
 
     <!-- Top Bar -->
@@ -209,7 +209,9 @@
                 Open UPI App
               </a>
             </div>
-            <button type="button" id="btn-edit-cost" class="btn-edit-cost" style="display:none" onclick="toggleCostEdit()">Change total cost</button>
+            <button type="button" id="btn-edit-cost" class="btn-edit-cost" style="display:none" onclick="toggleCostEdit()">
+              Change total or split
+            </button>
           </div>
 
           <!-- Add player row -->
@@ -223,20 +225,9 @@
               <button class="btn btn-primary" onclick="handleCheckIn()">Add</button>
             </div>
             <div id="checkin-suggestions" class="suggestions-dropdown" style="display:none"></div>
-            <details class="cricheroes-import">
-              <summary>
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-md"><use href="#i-download"/></svg>
-                Import from CricHeroes
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="chevron"><use href="#i-chevron"/></svg>
-              </summary>
-              <div class="import-form">
-                <input type="url" id="cricheroes-url" class="input" placeholder="Paste CricHeroes match URL">
-                <button class="btn btn-secondary" onclick="handleScrape(this)">Fetch</button>
-              </div>
-            </details>
           </div>
 
-          <!-- Cost + split (hidden once cost is saved — use "Change total cost" in pay bar) -->
+          <!-- Cost (hidden once saved — use "Change total or split" in pay bar) -->
           <div id="split-cost-section" class="section-block">
             <div class="section-label">
               <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-wallet"/></svg>
@@ -258,14 +249,29 @@
                 Players <span id="player-count-badge" class="count-badge"></span>
               </span>
             </div>
+            <div id="split-mode-row" class="split-mode-row" style="display:none">
+              <span class="split-mode-label">Split</span>
+              <label class="split-mode-option">
+                <input type="radio" name="split-mode" value="equal" checked>
+                Equally
+              </label>
+              <label class="split-mode-option">
+                <input type="radio" name="split-mode" value="exact">
+                Custom amounts
+              </label>
+            </div>
+            <div id="split-balance-bar" class="split-balance-bar" style="display:none"></div>
             <div id="player-list" class="player-list"></div>
+            <button type="button" id="btn-split-done" class="btn btn-primary btn-block btn-split-done" style="display:none" onclick="finishSplitEdit()">
+              Done
+            </button>
           </div>
 
           <!-- Danger zone -->
           <div class="match-actions-row">
-            <button class="btn-action-secondary" onclick="handleShare()">
+            <button class="btn-action-secondary" onclick="openShareMenu()">
               <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-share"/></svg>
-              Share to Group
+              Share
             </button>
             <button class="btn-delete-match" onclick="handleDeleteMatch()">
               <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"/></svg>
@@ -294,18 +300,23 @@
 
     </main>
 
-    <!-- Duplicate Resolution Modal -->
-    <div id="dup-modal" class="modal-overlay" style="display:none">
-      <div class="modal-card">
-        <h3 id="dup-modal-title">Duplicate Player</h3>
-        <p id="dup-modal-msg"></p>
-        <input type="text" id="dup-modal-name" class="input" style="display:none" maxlength="100">
-        <div class="modal-actions">
-          <button class="btn btn-secondary" id="dup-btn-skip">Skip</button>
-          <button class="btn btn-primary" id="dup-btn-rename">Keep &amp; Rename</button>
+    <!-- Share menu -->
+    <div id="share-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeShareMenu()">
+      <div class="modal-card share-modal-card">
+        <h3>Share match</h3>
+        <p class="share-modal-hint">Player link — no admin controls</p>
+        <div class="share-modal-actions">
+          <button type="button" class="btn btn-secondary btn-block" id="share-btn-copy" onclick="copyMatchLink()">
+            Copy link
+          </button>
+          <button type="button" class="btn btn-primary btn-block" id="share-btn-group" onclick="shareToGroup()">
+            Share to group
+          </button>
+          <button type="button" class="btn btn-ghost btn-block" onclick="closeShareMenu()">Cancel</button>
         </div>
       </div>
     </div>
+
   </div>
 
   <script src="config.deploy.js"></script>

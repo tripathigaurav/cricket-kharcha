@@ -3,7 +3,7 @@
 // ============================================================
 
 const API_URL = (typeof CRICKET_API_URL !== 'undefined') ? CRICKET_API_URL : '';
-const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'markPaid', 'deleteMatch']);
+const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount']);
 const UPI_VPA_RE = /^[\w.\-]{2,}@[a-z]{2,}$/i;
 const UPI_PHONE_RE = /^\d{10}$/;
 
@@ -261,13 +261,35 @@ function setupEventDelegation() {
         return;
       }
 
+      if (e.target.closest('.player-amount-input, .player-amount-edit-wrap')) return;
+
       if (item.dataset.canToggle === 'true') {
         const name = item.dataset.playerName;
         const newPaid = item.dataset.paid !== 'true';
         if (name) togglePaid(item, name, newPaid);
       }
     });
+
+    playerList.addEventListener('change', (e) => {
+      const input = e.target.closest('.player-amount-input');
+      if (!input?.dataset.playerName) return;
+      e.stopPropagation();
+      handlePlayerAmountChange(input.dataset.playerName, input.value, input);
+    });
+
+    playerList.addEventListener('keydown', (e) => {
+      if (e.target.closest('.player-amount-input') && e.key === 'Enter') {
+        e.preventDefault();
+        e.target.blur();
+      }
+    });
   }
+
+  document.querySelectorAll('input[name="split-mode"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      if (radio.checked) handleSplitModeChange(radio.value);
+    });
+  });
 
   const matchList = document.getElementById('match-list');
   if (matchList) {
@@ -510,6 +532,7 @@ function renderMatchList(matches, listEl, emptyEl) {
       const circumference = 2 * Math.PI * 13;
       const dashoffset = circumference - (pct / 100) * circumference;
 
+      const isExact = m.splitMode === 'exact';
       const perPlayer = hasCost && m.playerCount > 0 ? Math.ceil(m.totalCost / m.playerCount) : 0;
       const statusBadge = allPaid
         ? `<span class="match-card-settled">All settled</span>`
@@ -519,8 +542,9 @@ function renderMatchList(matches, listEl, emptyEl) {
             ? `<span class="match-card-status status-checkin">${m.playerCount} at crease</span>`
             : `<span class="match-card-status status-checkin">Awaiting players</span>`;
 
+      const splitLabel = isExact ? 'Custom split' : `₹${perPlayer}/player`;
       const cardMeta = hasCost
-        ? `${escapeHtml(m.payTo || '—')} · ₹${perPlayer}/player · ${m.paidCount}/${m.playerCount} paid`
+        ? `${escapeHtml(m.payTo || '—')} · ${splitLabel} · ${m.paidCount}/${m.playerCount} paid`
         : `${escapeHtml(m.payTo || '—')} · ${m.playerCount} player${m.playerCount !== 1 ? 's' : ''}`;
 
       html += `
@@ -660,18 +684,22 @@ function applyMatchData(match, matchId) {
   setPageTitle(formatDate(match.date));
 
   const payBar = document.getElementById('payment-info-bar');
+  const isExact = isExactSplit(match);
   const perPlayerDisplay = expectedPerPlayer(match) || match.perPlayerCost;
   if (match.totalCost > 0 && match.payTo) {
     payBar.style.display = '';
     const playerCount = match.players.length;
     const labelEl = document.querySelector('.pay-amount-label');
     if (labelEl) {
-      labelEl.textContent = playerCount > 0
-        ? `Per player · ₹${match.totalCost} ÷ ${playerCount}`
-        : 'Per player';
+      labelEl.textContent = isExact
+        ? `Custom split · ₹${match.totalCost} total`
+        : (playerCount > 0
+          ? `Per player · ₹${match.totalCost} ÷ ${playerCount}`
+          : 'Per player');
     }
-    document.getElementById('pay-amount-display').innerHTML =
-      `<span class="pay-amount-prefix">₹</span>${perPlayerDisplay}`;
+    document.getElementById('pay-amount-display').innerHTML = isExact
+      ? '<span class="pay-amount-sub">Amounts vary per player</span>'
+      : `<span class="pay-amount-prefix">₹</span>${perPlayerDisplay}`;
 
     const payToInfo = document.getElementById('pay-to-info');
     if (payToInfo) {
@@ -684,7 +712,7 @@ function applyMatchData(match, matchId) {
     const upiLink = document.getElementById('upi-link');
     let showUpiLink = false;
     if (upiLink) {
-      if (match.payToUPI && IS_MOBILE) {
+      if (match.payToUPI && IS_MOBILE && !isExact) {
         const upiTn = encodeURIComponent('Cricket ' + formatDate(match.date));
         upiLink.href = `upi://pay?pa=${encodeURIComponent(match.payToUPI)}&am=${perPlayerDisplay}&cu=INR&tn=${upiTn}`;
         upiLink.style.display = '';
@@ -724,6 +752,9 @@ function applyMatchData(match, matchId) {
   }
   updateSplitPreview();
   updateCostSectionUI(match);
+  updateSplitModeUI(match);
+  updateSplitAssignmentBar(match);
+  updateSplitDoneButton(match);
 
   const badge = document.getElementById('player-count-badge');
   if (badge) {
@@ -760,15 +791,64 @@ function updateCostSectionUI(match) {
   }
 }
 
+function isSplitEditing() {
+  const section = document.getElementById('split-cost-section');
+  return section?.dataset.editing === 'true';
+}
+
+function setSplitEditing(on) {
+  const section = document.getElementById('split-cost-section');
+  if (!section) return;
+  section.dataset.editing = on ? 'true' : '';
+  if (_currentMatch) {
+    updateCostSectionUI(_currentMatch);
+    updateSplitModeUI(_currentMatch);
+    updateSplitAssignmentBar(_currentMatch);
+    updateSplitDoneButton(_currentMatch);
+    renderPlayerList(_currentMatch);
+  }
+}
+
 function toggleCostEdit() {
   const section = document.getElementById('split-cost-section');
   const editBtn = document.getElementById('btn-edit-cost');
   if (!section) return;
-  section.dataset.editing = 'true';
+  setSplitEditing(true);
   section.style.display = '';
   if (editBtn) editBtn.style.display = 'none';
+
+  const splitRow = document.getElementById('split-mode-row');
+  const target = splitRow && splitRow.style.display !== 'none' ? splitRow : section;
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.add('split-edit-highlight');
+  setTimeout(() => target.classList.remove('split-edit-highlight'), 2200);
+
   const costInput = document.getElementById('total-cost');
-  if (costInput) costInput.focus();
+  if (costInput && target === section) costInput.focus();
+}
+
+function finishSplitEdit() {
+  if (!_currentMatch) return;
+  if (isExactSplit(_currentMatch)) {
+    const left = _currentMatch.totalCost - sumPlayerAmounts(_currentMatch);
+    if (left > 0) {
+      showToast(`₹${left} still unassigned — balance before Done`, 'error');
+      return;
+    }
+    if (left < 0) {
+      showToast(`₹${-left} over assigned — fix amounts first`, 'error');
+      return;
+    }
+  }
+  setSplitEditing(false);
+  document.getElementById('payment-info-bar')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  showToast('Split saved');
+}
+
+function updateSplitDoneButton(match) {
+  const btn = document.getElementById('btn-split-done');
+  if (!btn) return;
+  btn.style.display = (_canWrite && match?.totalCost > 0 && isSplitEditing()) ? '' : 'none';
 }
 
 function applyReadOnlyUI() {
@@ -784,9 +864,6 @@ function applyReadOnlyUI() {
   const checkinRow = document.querySelector('.checkin-form');
   if (checkinRow) checkinRow.style.display = '';
 
-  const importBlock = document.querySelector('.cricheroes-import');
-  if (importBlock) importBlock.style.display = _canWrite ? '' : 'none';
-
   const actionsRow = document.querySelector('.match-actions-row');
   if (actionsRow) {
     const deleteBtn = actionsRow.querySelector('.btn-delete-match');
@@ -798,8 +875,13 @@ function applyReadOnlyUI() {
 
 function handleCopyUPI() {
   if (!_currentMatch?.payToUPI) return;
-  const per = expectedPerPlayer(_currentMatch) || _currentMatch.perPlayerCost;
-  const text = `${_currentMatch.payToUPI}\nPay ₹${per} for Cricket ${formatDate(_currentMatch.date)}`;
+  let text = _currentMatch.payToUPI;
+  if (!isExactSplit(_currentMatch)) {
+    const per = expectedPerPlayer(_currentMatch) || _currentMatch.perPlayerCost;
+    text += `\nPay ₹${per} for Cricket ${formatDate(_currentMatch.date)}`;
+  } else {
+    text += `\nCricket ${formatDate(_currentMatch.date)} — see match for your amount`;
+  }
   try {
     navigator.clipboard.writeText(text);
     showToast('UPI ID copied!');
@@ -808,12 +890,31 @@ function handleCopyUPI() {
   }
 }
 
+function isExactSplit(match) {
+  return match?.splitMode === 'exact';
+}
+
+function getSelectedSplitMode() {
+  const checked = document.querySelector('input[name="split-mode"]:checked');
+  return checked ? checked.value : 'equal';
+}
+
+function sumPlayerAmounts(match) {
+  return (match?.players || []).reduce((s, p) => s + (Number(p.amountOwed) || 0), 0);
+}
+
+function getPlayerOwed(match, player) {
+  if (isExactSplit(match)) return Number(player.amountOwed) || 0;
+  return expectedPerPlayer(match) || player.amountOwed || 0;
+}
+
 function expectedPerPlayer(match) {
   if (!match?.totalCost || !match.players?.length) return 0;
   return Math.ceil(match.totalCost / match.players.length);
 }
 
 function isSplitStale(match) {
+  if (isExactSplit(match)) return false;
   if (!match?.totalCost || !match.players?.length) return false;
   const expected = expectedPerPlayer(match);
   if (match.perPlayerCost !== expected) return true;
@@ -828,7 +929,19 @@ function applyExpectedSplit(match) {
   return match;
 }
 
+function applyServerMatchData(match, data) {
+  if (!data) return match;
+  if (data.totalCost) match.totalCost = data.totalCost;
+  if (data.splitMode) match.splitMode = data.splitMode;
+  if (data.perPlayerCost) match.perPlayerCost = data.perPlayerCost;
+  if (data.players) match.players = data.players;
+  return match;
+}
+
 function applyServerSplit(match, data) {
+  if (isExactSplit(match) || data?.splitMode === 'exact') {
+    return applyServerMatchData(match, data);
+  }
   if (!data?.perPlayerCost) return match;
   if (data.totalCost) match.totalCost = data.totalCost;
   match.perPlayerCost = data.perPlayerCost;
@@ -856,6 +969,89 @@ async function resyncSplitIfStale(match, matchId) {
   }, lock);
 }
 
+function updateSplitModeUI(match) {
+  const row = document.getElementById('split-mode-row');
+  if (!row) return;
+  const show = _canWrite && (match?.players?.length || 0) > 0 && match?.totalCost > 0 && isSplitEditing();
+  row.style.display = show ? '' : 'none';
+  if (!show) return;
+  const mode = match.splitMode || 'equal';
+  const radio = row.querySelector(`input[name="split-mode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+}
+
+function updateSplitAssignmentBar(match) {
+  const bar = document.getElementById('split-balance-bar');
+  if (!bar) return;
+  if (!isExactSplit(match) || !match.totalCost || !isSplitEditing()) {
+    bar.style.display = 'none';
+    return;
+  }
+  const assigned = sumPlayerAmounts(match);
+  const total = match.totalCost;
+  const left = total - assigned;
+  bar.style.display = '';
+  if (left === 0) {
+    bar.className = 'split-balance-bar balanced';
+    bar.textContent = `₹${assigned} assigned of ₹${total} ✓ balanced`;
+  } else if (left > 0) {
+    bar.className = 'split-balance-bar unbalanced';
+    bar.textContent = `₹${assigned} of ₹${total} — ₹${left} left to assign`;
+  } else {
+    bar.className = 'split-balance-bar unbalanced';
+    bar.textContent = `₹${assigned} of ₹${total} — ₹${-left} over assigned`;
+  }
+}
+
+async function handleSplitModeChange(newMode) {
+  if (!_canWrite || !_currentMatch) return;
+  const prev = _currentMatch.splitMode || 'equal';
+  if (newMode === prev) return;
+  if (prev === 'exact' && newMode === 'equal') {
+    if (!confirm('Switch to equal split? Each player will owe the same amount.')) {
+      const revert = document.querySelector(`input[name="split-mode"][value="${prev}"]`);
+      if (revert) revert.checked = true;
+      return;
+    }
+  }
+  const totalCost = _currentMatch.totalCost || Number(document.getElementById('total-cost')?.value);
+  if (!totalCost) return;
+  const data = await api('lockMatch', { matchId: currentMatchId, totalCost, splitMode: newMode }, 'POST');
+  if (data.error) {
+    showToast(data.error, 'error');
+    const revert = document.querySelector(`input[name="split-mode"][value="${prev}"]`);
+    if (revert) revert.checked = true;
+    return;
+  }
+  applyServerMatchData(_currentMatch, data);
+  setSplitEditing(newMode === 'exact');
+  applyMatchData(_currentMatch, currentMatchId);
+  invalidateMatchListCache();
+}
+
+async function handlePlayerAmountChange(playerName, rawValue, inputEl) {
+  if (!_canWrite || !isExactSplit(_currentMatch)) return;
+  const amount = Math.round(Number(rawValue));
+  if (isNaN(amount) || amount < 0) {
+    showToast('Invalid amount', 'error');
+    if (inputEl && _currentMatch) {
+      const p = _currentMatch.players.find(pl => pl.name.toLowerCase() === playerName.toLowerCase());
+      if (p) inputEl.value = p.amountOwed;
+    }
+    return;
+  }
+  const data = await api('setPlayerAmount', { matchId: currentMatchId, playerName, amountOwed: amount }, 'POST');
+  if (data.error) {
+    showToast(data.error, 'error');
+    return;
+  }
+  applyServerMatchData(_currentMatch, data);
+  updateSplitAssignmentBar(_currentMatch);
+  renderPlayerList(_currentMatch);
+  updateSummary(_currentMatch);
+  invalidateMatchListCache();
+}
+
 function updateSplitPreview() {
   const preview = document.getElementById('split-preview');
   if (!preview) return;
@@ -870,8 +1066,12 @@ function updateSplitPreview() {
   const costInput = document.getElementById('total-cost');
   const cost = Number(costInput.value);
   const count = _currentMatch ? _currentMatch.players.length : 0;
+  const isExact = getSelectedSplitMode() === 'exact';
 
-  if (cost > 0 && count > 0) {
+  if (cost > 0 && count > 0 && isExact) {
+    preview.textContent = 'Set each player\'s amount after saving the total';
+    preview.style.display = '';
+  } else if (cost > 0 && count > 0) {
     preview.innerHTML = `Each batter owes <strong>₹${Math.ceil(cost / count)}</strong> (₹${cost} ÷ ${count})`;
     preview.style.display = '';
   } else if (cost > 0) {
@@ -888,14 +1088,20 @@ async function saveCost() {
   const cost = Number(document.getElementById('total-cost').value);
   if (!cost || cost <= 0 || !_currentMatch) return;
   if (cost === _lastPersistedCost) return;
-  const data = await api('lockMatch', { matchId: currentMatchId, totalCost: cost }, 'POST');
+  const splitMode = getSelectedSplitMode();
+  const data = await api('lockMatch', { matchId: currentMatchId, totalCost: cost, splitMode }, 'POST');
   if (data.error) return showToast(data.error, 'error');
   _lastPersistedCost = cost;
-  const section = document.getElementById('split-cost-section');
-  if (section) section.dataset.editing = '';
   if (_currentMatch) {
     _currentMatch.totalCost = cost;
-    applyServerSplit(_currentMatch, data);
+    if (data.splitMode === 'exact') applyServerMatchData(_currentMatch, data);
+    else applyServerSplit(_currentMatch, data);
+    const section = document.getElementById('split-cost-section');
+    const wasEditing = isSplitEditing();
+    if (section) {
+      if (data.splitMode === 'exact') section.dataset.editing = 'true';
+      else if (!wasEditing) section.dataset.editing = '';
+    }
     applyMatchData(_currentMatch, currentMatchId);
   }
   invalidateMatchListCache();
@@ -921,26 +1127,30 @@ function renderPlayerList(match) {
     return a.name.localeCompare(b.name);
   });
 
-  const perPlayer = expectedPerPlayer(match);
+  const isExact = isExactSplit(match);
+  const perPlayer = isExact ? 0 : expectedPerPlayer(match);
 
   listEl.innerHTML = sorted.map((p, i) => {
-    const canToggle = hasCost && _canWrite;
+    const canToggle = hasCost;
     const showRemove = !hasCost && _canWrite;
-    const owed = hasCost && perPlayer ? perPlayer : p.amountOwed;
+    const owed = getPlayerOwed(match, p);
+    const amountHtml = hasCost
+      ? (isExact && _canWrite && !p.paid
+        ? `<span class="player-amount-edit-wrap"><span class="player-amount-prefix">₹</span><input type="number" class="player-amount-input" data-player-name="${escapeAttr(p.name)}" value="${p.amountOwed}" min="0" inputmode="numeric"></span>`
+        : `<span class="player-amount ${p.paid ? 'paid-amount' : ''}">₹${owed}</span>`)
+      : (showRemove
+        ? `<button class="player-remove" data-player-name="${escapeAttr(p.name)}" title="Remove">✕</button>`
+        : '');
+    const exactEdit = isExact && _canWrite && hasCost && !p.paid && isSplitEditing();
     return `
-      <div class="player-item ${p.paid && hasCost ? 'paid' : ''}"
+      <div class="player-item ${p.paid && hasCost ? 'paid' : ''} ${exactEdit ? 'player-item-exact' : ''}"
            data-player-name="${escapeAttr(p.name)}"
            data-can-toggle="${canToggle}"
            data-paid="${p.paid && hasCost}"
            style="animation-delay:${i * 50}ms">
         <div class="player-checkbox ${hasCost ? '' : 'checked-in'}">${hasCost ? (p.paid ? '✓' : '') : '✓'}</div>
-        <span class="player-name">${escapeHtml(p.name)}</span>
-        ${hasCost
-          ? `<span class="player-amount ${p.paid ? 'paid-amount' : ''}">₹${owed}</span>`
-          : showRemove
-            ? `<button class="player-remove" data-player-name="${escapeAttr(p.name)}" title="Remove">✕</button>`
-            : ''
-        }
+        <span class="player-name" title="${escapeAttr(p.name)}">${escapeHtml(p.name)}</span>
+        ${amountHtml}
       </div>`;
   }).join('');
 }
@@ -952,14 +1162,13 @@ function updateSummary(match) {
     summaryBar.style.display = 'none';
     return;
   }
-  const perPlayer = expectedPerPlayer(match);
   const paidCount = players.filter(p => p.paid).length;
   if (paidCount === players.length) {
     summaryBar.style.display = 'none';
     return;
   }
   summaryBar.style.display = '';
-  const paidAmount = paidCount * (perPlayer || 0);
+  const paidAmount = players.filter(p => p.paid).reduce((s, p) => s + getPlayerOwed(match, p), 0);
   const remaining = Math.max(0, match.totalCost - paidAmount);
   document.getElementById('summary-text').innerHTML =
     `<strong>${paidCount}/${players.length}</strong> paid · <span style="color:var(--warn)">₹${remaining} left</span>`;
@@ -995,8 +1204,9 @@ async function handleCheckIn() {
         paidTimestamp: ''
       });
     }
-    if (data.perPlayerCost) applyServerSplit(_currentMatch, data);
-    else applyExpectedSplit(_currentMatch);
+    if (data.players || data.splitMode === 'exact') applyServerMatchData(_currentMatch, data);
+    else if (data.perPlayerCost) applyServerSplit(_currentMatch, data);
+    else if (!isExactSplit(_currentMatch)) applyExpectedSplit(_currentMatch);
     applyMatchData(_currentMatch, currentMatchId);
     addKnownPlayerName(name);
   }
@@ -1013,8 +1223,9 @@ async function handleRemovePlayer(name) {
     _currentMatch.players = _currentMatch.players.filter(
       p => p.name.toLowerCase() !== name.toLowerCase()
     );
-    if (data.perPlayerCost) applyServerSplit(_currentMatch, data);
-    else applyExpectedSplit(_currentMatch);
+    if (data.players || data.splitMode === 'exact') applyServerMatchData(_currentMatch, data);
+    else if (data.perPlayerCost) applyServerSplit(_currentMatch, data);
+    else if (!isExactSplit(_currentMatch)) applyExpectedSplit(_currentMatch);
     applyMatchData(_currentMatch, currentMatchId);
   }
   showToast(`${name} removed`);
@@ -1051,7 +1262,6 @@ async function handleDeleteMatch() {
 
 // --- Mark Paid ---
 async function togglePaid(el, playerName, paid) {
-  if (!_canWrite) return showToast('View-only link — cannot mark payments', 'error');
   if (_markPaidPending.has(playerName)) return;
   _markPaidPending.add(playerName);
   el.style.pointerEvents = 'none';
@@ -1088,124 +1298,6 @@ async function togglePaid(el, playerName, paid) {
       fireConfetti();
     }
   }
-}
-
-// --- CricHeroes Import ---
-async function handleScrape(btn) {
-  if (!_canWrite) return showToast('View-only link — cannot import players', 'error');
-  const urlInput = document.getElementById('cricheroes-url');
-  const url = urlInput.value.trim();
-  if (!url) return showToast('Paste a CricHeroes match URL', 'error');
-
-  btn.disabled = true;
-  btn.textContent = 'Fetching...';
-
-  const data = await api('scrape', { url });
-
-  btn.disabled = false;
-  btn.textContent = 'Fetch';
-
-  if (data.error) return showToast(data.error, 'error');
-  if (data.note) return showToast(data.note, 'error');
-
-  const players = data.players || [];
-  if (players.length === 0) return showToast('No players found', 'error');
-
-  const currentPlayers = (_currentMatch?.players || []).map(p => p.name.toLowerCase());
-  const toAdd = [];
-  const dupes = [];
-  let added = 0, skipped = 0, renamed = 0;
-
-  for (const p of players) {
-    if (currentPlayers.includes(p.name.toLowerCase())) dupes.push(p);
-    else toAdd.push(p.name);
-  }
-
-  if (toAdd.length > 0) {
-    const batch = await api('checkInBatch', { matchId: currentMatchId, playerNames: toAdd }, 'POST');
-    if (batch.error) return showToast(batch.error, 'error');
-    added = batch.added || 0;
-    skipped += batch.skipped || 0;
-    if (_currentMatch && added > 0) {
-      toAdd.forEach(name => {
-        if (!_currentMatch.players.some(pl => pl.name.toLowerCase() === name.toLowerCase())) {
-          _currentMatch.players.push({
-            name,
-            playerId: '',
-            amountOwed: batch.perPlayerCost || 0,
-            paid: false,
-            paidTimestamp: ''
-          });
-          addKnownPlayerName(name);
-        }
-      });
-      if (batch.perPlayerCost) applyServerSplit(_currentMatch, batch);
-      else applyExpectedSplit(_currentMatch);
-      applyMatchData(_currentMatch, currentMatchId);
-    }
-  }
-
-  for (const p of dupes) {
-    const resolution = await showDuplicateDialog(p.name);
-    if (resolution === null) {
-      skipped++;
-      continue;
-    }
-    const result = await api('checkIn', { matchId: currentMatchId, playerName: resolution }, 'POST');
-    if (result.success) {
-      renamed++;
-      if (_currentMatch) {
-        _currentMatch.players.push({
-          name: resolution,
-          playerId: '',
-          amountOwed: result.perPlayerCost || 0,
-          paid: false,
-          paidTimestamp: ''
-        });
-        if (result.perPlayerCost) applyServerSplit(_currentMatch, result);
-        applyMatchData(_currentMatch, currentMatchId);
-        addKnownPlayerName(resolution);
-      }
-    }
-  }
-
-  const parts = [];
-  if (added) parts.push(`${added} added`);
-  if (skipped) parts.push(`${skipped} skipped`);
-  if (renamed) parts.push(`${renamed} renamed`);
-  showToast(parts.join(', ') || 'Import complete');
-  urlInput.value = '';
-  invalidateMatchListCache();
-}
-
-function showDuplicateDialog(name) {
-  return new Promise((resolve) => {
-    const modal = document.getElementById('dup-modal');
-    const msg = document.getElementById('dup-modal-msg');
-    const nameInput = document.getElementById('dup-modal-name');
-    const skipBtn = document.getElementById('dup-btn-skip');
-    const renameBtn = document.getElementById('dup-btn-rename');
-
-    msg.textContent = `"${name}" is already checked in. Skip or add with a different name?`;
-    nameInput.value = name + ' (2)';
-    nameInput.style.display = '';
-    modal.style.display = '';
-
-    function cleanup() {
-      modal.style.display = 'none';
-      skipBtn.removeEventListener('click', onSkip);
-      renameBtn.removeEventListener('click', onRename);
-    }
-    function onSkip() { cleanup(); resolve(null); }
-    function onRename() {
-      const newName = nameInput.value.trim();
-      cleanup();
-      resolve(newName || null);
-    }
-
-    skipBtn.addEventListener('click', onSkip);
-    renameBtn.addEventListener('click', onRename);
-  });
 }
 
 // --- Player Stats ---
@@ -1319,21 +1411,27 @@ function sortStats(key) {
 }
 
 // --- Share (WhatsApp-friendly) ---
-async function handleShare() {
-  if (!_currentMatch) return;
-  const match = _currentMatch;
+function getMatchPlayerUrl(matchId) {
+  const base = window.location.origin + window.location.pathname;
+  return `${base}#/match/${encodeURIComponent(matchId)}`;
+}
+
+function buildShareContent(match) {
   const players = match.players || [];
   const hasCost = match.totalCost > 0;
   const dateStr = formatDate(match.date);
-  const base = window.location.origin + window.location.pathname;
-  const url = `${base}#/match/${encodeURIComponent(match.matchId)}`;
+  const url = getMatchPlayerUrl(match.matchId);
   const shareTitle = `🏏 Cricket Match — ${dateStr}`;
-
   let body = '';
 
   if (hasCost) {
-    const per = expectedPerPlayer(match) || match.perPlayerCost;
-    body += `💰 ₹${per} per player (₹${match.totalCost} total)\n`;
+    const isExact = isExactSplit(match);
+    if (isExact) {
+      body += `💰 Custom split · ₹${match.totalCost} total\n`;
+    } else {
+      const per = expectedPerPlayer(match) || match.perPlayerCost;
+      body += `💰 ₹${per} per player (₹${match.totalCost} total)\n`;
+    }
     if (match.payTo) {
       body += `📤 Pay to: ${match.payTo}`;
       if (match.payToUPI) body += ` (${match.payToUPI})`;
@@ -1346,28 +1444,56 @@ async function handleShare() {
 
     if (paid.length > 0) {
       body += `✅ Paid (${paid.length}):\n`;
-      paid.forEach(p => body += `  • ${p.name}\n`);
+      paid.forEach(p => { body += `  • ${p.name} — ₹${getPlayerOwed(match, p)}\n`; });
       body += `\n`;
     }
     if (unpaid.length > 0) {
       body += `⏳ Pending (${unpaid.length}):\n`;
-      unpaid.forEach(p => body += `  • ${p.name} — ₹${per}\n`);
+      unpaid.forEach(p => { body += `  • ${p.name} — ₹${getPlayerOwed(match, p)}\n`; });
       body += `\n`;
     }
 
-    body += `Mark your payment here:\n${url}`;
+    body += `Open match:\n${url}`;
   } else {
     body += `👥 ${players.length} player${players.length !== 1 ? 's' : ''} checked in\n`;
     body += `💰 Cost not set yet\n\n`;
     body += `Check in here:\n${url}`;
   }
 
-  const msg = `${shareTitle}\n\n${body}`;
+  return { shareTitle, body, msg: `${shareTitle}\n\n${body}`, url };
+}
+
+function openShareMenu() {
+  if (!_currentMatch) return;
+  const modal = document.getElementById('share-modal');
+  if (modal) modal.style.display = '';
+}
+
+function closeShareMenu() {
+  const modal = document.getElementById('share-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function copyMatchLink() {
+  if (!_currentMatch) return;
+  const url = getMatchPlayerUrl(_currentMatch.matchId);
+  try {
+    await navigator.clipboard.writeText(url);
+    closeShareMenu();
+    showToast('Link copied!');
+  } catch (e) {
+    showToast('Could not copy link', 'error');
+  }
+}
+
+async function shareToGroup() {
+  if (!_currentMatch) return;
+  const { shareTitle, body, msg } = buildShareContent(_currentMatch);
 
   if (navigator.share) {
     try {
-      // title + text both had the heading — apps concatenated them. Body only in text.
       await navigator.share({ title: shareTitle, text: body });
+      closeShareMenu();
       return;
     } catch (e) {
       // User cancelled or share failed, fall through to clipboard
@@ -1376,6 +1502,7 @@ async function handleShare() {
 
   try {
     await navigator.clipboard.writeText(msg);
+    closeShareMenu();
     showToast('Copied to clipboard! Paste in your group');
   } catch (e) {
     showToast('Could not copy to clipboard', 'error');

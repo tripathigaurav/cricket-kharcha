@@ -43,7 +43,7 @@ async function get(action, params = {}) {
   catch(e) { return { error: `Non-JSON (HTTP ${r.status}): ${text.substring(0, 120)}` }; }
 }
 
-const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'markPaid', 'deleteMatch']);
+const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount']);
 
 function trackCreate(result) {
   if (result?.matchId && result?.writeToken) {
@@ -193,6 +193,49 @@ async function run() {
   assert('Solo player owes full ₹500', sSolo.perPlayerCost === 500, `got ${sSolo.perPlayerCost}`);
 
   // ══════════════════════════════════════════════════════════
+  // BLOCK D7: Custom split (exact mode)
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── D7. Custom split — exact mode');
+  const cExact = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'ExactAdmin', payToUPI: 'exact@upi' });
+  createdMatchIds.push(cExact.matchId);
+  const exactId = cExact.matchId;
+  await post({ action: 'checkIn', matchId: exactId, playerName: 'A' });
+  await post({ action: 'checkIn', matchId: exactId, playerName: 'B' });
+  await post({ action: 'checkIn', matchId: exactId, playerName: 'C' });
+  const lockExact = await post({ action: 'lockMatch', matchId: exactId, totalCost: 5000, splitMode: 'exact' });
+  assert('Exact lock succeeds', lockExact.success === true);
+  assert('splitMode is exact', lockExact.splitMode === 'exact');
+
+  await post({ action: 'setPlayerAmount', matchId: exactId, playerName: 'A', amountOwed: 2000 });
+  await post({ action: 'setPlayerAmount', matchId: exactId, playerName: 'B', amountOwed: 2000 });
+  const setC = await post({ action: 'setPlayerAmount', matchId: exactId, playerName: 'C', amountOwed: 1000 });
+  assert('setPlayerAmount succeeds', setC.success === true);
+  assert('assigned = 5000', setC.assigned === 5000, `got ${setC.assigned}`);
+
+  const mExact = await get('match', { id: exactId });
+  assert('splitMode exact on getMatch', mExact.match?.splitMode === 'exact');
+  assert('A owes 2000', mExact.match?.players?.find(p => p.name === 'A')?.amountOwed === 2000);
+  assert('B owes 2000', mExact.match?.players?.find(p => p.name === 'B')?.amountOwed === 2000);
+  assert('C owes 1000', mExact.match?.players?.find(p => p.name === 'C')?.amountOwed === 1000);
+
+  await post({ action: 'markPaid', matchId: exactId, playerName: 'A', paid: true });
+  const mPaid = await get('match', { id: exactId });
+  assert('paidAmount = 2000 (not equal share)', mPaid.match?.paidAmount === 2000, `got ${mPaid.match?.paidAmount}`);
+
+  await post({ action: 'checkIn', matchId: exactId, playerName: 'D' });
+  const mAfterD = await get('match', { id: exactId });
+  assert('B still owes 2000 after check-in', mAfterD.match?.players?.find(p => p.name === 'B')?.amountOwed === 2000);
+  assert('C still owes 1000 after check-in', mAfterD.match?.players?.find(p => p.name === 'C')?.amountOwed === 1000);
+  assert('D gets 0 in exact mode', mAfterD.match?.players?.find(p => p.name === 'D')?.amountOwed === 0);
+
+  const toEqual = await post({ action: 'lockMatch', matchId: exactId, totalCost: 5000, splitMode: 'equal' });
+  assert('Switch to equal succeeds', toEqual.success === true);
+  assert('splitMode is equal', toEqual.splitMode === 'equal');
+  const mEqual = await get('match', { id: exactId });
+  const expectedEqual = Math.ceil(5000 / 4);
+  assert('All owe equal split after switch', mEqual.match?.players?.every(p => p.amountOwed === expectedEqual), `expected ${expectedEqual}`);
+
+  // ══════════════════════════════════════════════════════════
   // BLOCK E: Payments
   // ══════════════════════════════════════════════════════════
   console.log('\n── E1. Mark paid');
@@ -263,8 +306,9 @@ async function run() {
   const freshMatch = await post({ action: 'createMatch', date: '2026-06-09', payTo: 'TokenTest', payToUPI: 't@upi' });
   createdMatchIds.push(freshMatch.matchId);
   delete writeTokens[freshMatch.matchId];
+  await post({ action: 'checkIn', matchId: freshMatch.matchId, playerName: 'X' });
   const noTokenPaid = await post({ action: 'markPaid', matchId: freshMatch.matchId, playerName: 'X', paid: true });
-  assert('markPaid without token on protected match fails', !!noTokenPaid.error);
+  assert('markPaid without token succeeds (player link)', noTokenPaid.success === true, JSON.stringify(noTokenPaid));
   writeTokens[freshMatch.matchId] = freshMatch.writeToken;
 
   // ══════════════════════════════════════════════════════════
