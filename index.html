@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a7f37">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Cricket Kharcha</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏏</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Demo Banner (hidden when API is configured) -->
+    <div id="demo-banner" style="display:none;background:#bf8700;color:#fff;text-align:center;font-size:12px;padding:6px 12px;font-weight:600;">
+      🧪 Demo Mode — data is temporary. <a href="https://github.com/features/actions" style="color:#fff;text-decoration:underline" onclick="event.preventDefault()">Set up backend to go live</a>
+    </div>
+
+    <!-- Top Bar -->
+    <header class="top-bar">
+      <button id="btn-back" class="btn-icon" onclick="goBack()" style="display:none">←</button>
+      <h1 id="page-title">🏏 Cricket Kharcha</h1>
+      <button id="btn-stats" class="btn-icon" onclick="navigate('#/stats')" title="Player Stats">📊</button>
+    </header>
+
+    <!-- Views -->
+    <main id="view-container">
+
+      <!-- Match List View -->
+      <section id="view-home" class="view">
+        <div id="match-list" class="card-list"></div>
+        <div id="no-matches" class="empty-state" style="display:none">
+          <div class="empty-icon">🏏</div>
+          <p>No matches yet</p>
+          <p class="text-muted">Create your first match to get started</p>
+        </div>
+        <button class="fab" onclick="navigate('#/new')">+ New Match</button>
+      </section>
+
+      <!-- New Match View -->
+      <section id="view-new" class="view" style="display:none">
+        <div class="form-card">
+          <div class="form-group">
+            <label for="match-date">Match Date</label>
+            <input type="date" id="match-date" class="input">
+          </div>
+          <div class="form-group">
+            <label for="pay-to">Pay To (who collected the money?)</label>
+            <input type="text" id="pay-to" class="input" placeholder="e.g. Gaurav" maxlength="200">
+          </div>
+          <div class="form-group">
+            <label for="pay-upi">UPI ID or Phone Number</label>
+            <input type="text" id="pay-upi" class="input" placeholder="e.g. gaurav@upi or 9876543210" autocomplete="off" maxlength="200">
+          </div>
+          <button class="btn btn-primary btn-block" onclick="handleCreateMatch()">Create Match & Get Check-in Link</button>
+        </div>
+      </section>
+
+      <!-- Match Detail View — unified check-in + payment on one page -->
+      <section id="view-match" class="view" style="display:none">
+        <div id="match-loading" class="loading">Loading...</div>
+
+        <div id="match-body" style="display:none">
+
+          <!-- Pay-to banner -->
+          <div id="payment-info-bar" class="payment-info-bar" style="display:none">
+            <div class="upi-pay-section">
+              <div id="pay-amount-display" class="pay-amount"></div>
+              <a id="upi-link" class="btn btn-upi" href="#" target="_blank" style="display:none">💳 Pay via UPI</a>
+            </div>
+          </div>
+
+          <!-- Add player row -->
+          <div class="section-block">
+            <div class="section-label">👥 Check-in Players</div>
+            <div class="checkin-form">
+              <input type="text" id="checkin-name" class="input" placeholder="Type name &amp; press Add" autocomplete="off" maxlength="100">
+              <button class="btn btn-primary" onclick="handleCheckIn()">Add</button>
+            </div>
+            <details class="cricheroes-import">
+              <summary>📥 Import from CricHeroes</summary>
+              <div class="import-form">
+                <input type="url" id="cricheroes-url" class="input" placeholder="Paste CricHeroes match URL">
+                <button class="btn btn-secondary" onclick="handleScrape()">Fetch</button>
+              </div>
+            </details>
+          </div>
+
+          <!-- Cost + split -->
+          <div class="section-block">
+            <div class="section-label">💸 Split Cost</div>
+            <div class="cost-row">
+              <span class="cost-label">Total Cost (₹)</span>
+              <input type="number" id="total-cost" class="input input-inline" placeholder="4000" min="0">
+            </div>
+            <div id="split-preview" class="split-preview"></div>
+          </div>
+
+          <!-- Player list + payment marks -->
+          <div class="section-block">
+            <div class="section-label-row">
+              <span class="section-label">📋 Players <span id="player-count-badge" class="count-badge"></span></span>
+              <button id="btn-share" class="btn-share-inline" onclick="handleShare()">📤 Share</button>
+            </div>
+            <div id="player-list" class="player-list"></div>
+          </div>
+
+        </div>
+
+        <!-- Sticky summary bar (shown when cost is set) -->
+        <div id="summary-bar" class="summary-bar" style="display:none">
+          <span id="summary-text"></span>
+        </div>
+      </section>
+
+      <!-- Player Stats View -->
+      <section id="view-stats" class="view" style="display:none">
+        <div id="stats-loading" class="loading">Loading...</div>
+        <div id="stats-table-wrap"></div>
+        <div id="no-stats" class="empty-state" style="display:none">
+          <div class="empty-icon">📊</div>
+          <p>No player data yet</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
