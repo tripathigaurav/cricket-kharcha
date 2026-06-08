@@ -68,7 +68,9 @@ Edit `config.js`:
 const CRICKET_API_URL = 'https://script.google.com/macros/s/.../exec';
 ```
 
-`config.js` is gitignored — never commit your live URL or sheet ID.
+`config.js` is gitignored — never commit your Sheet ID.
+
+**GitHub Pages:** the live site loads [`config.deploy.js`](config.deploy.js) (API URL only, committed). After rotating your Apps Script deployment, update that file and push. Local `config.js` overrides `config.deploy.js` when present.
 
 ### 4. GitHub Pages
 
