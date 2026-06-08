@@ -45,11 +45,11 @@ No build step, no npm, no framework — static HTML/JS/CSS + Apps Script.
 1. In the Sheet: **Extensions → Apps Script**
 2. Paste the contents of `Code.gs`
 3. **File → Project properties → Script properties** — set timezone to **Asia/Kolkata**
-4. **Store Sheet ID in Script Properties (required)** — never put a real ID in `Code.gs` in git:
-   - In the editor, edit `configureSheetId()` → replace `PASTE_YOUR_SHEET_ID` with your ID → **Run** once  
-   - Or run `setSheetId('YOUR_SHEET_ID')` from the editor console  
-   - Verify: **Project settings → Script properties** shows `SHEET_ID`  
-   - `FALLBACK_SHEET_ID` in the repo stays `''`; production uses Script Properties only
+4. **Set Sheet ID in the Apps Script editor only** — never commit a real ID to git:
+   - At the top of `Code.gs`, set `EDITOR_SHEET_ID = 'your-id-from-sheet-url'`  
+   - Deploy — the first API request auto-saves it to Script Properties (no extra run needed)  
+   - Optional: run `configureSheetId()` once to set Script Properties immediately  
+   - In the public git repo, `EDITOR_SHEET_ID` stays `''`
 5. Run `initializeSheets()` once to create headers (includes `WriteToken` column)
 6. **Deploy → New Deployment → Web App**
    - Execute as: **Me**
@@ -140,7 +140,7 @@ test.js           # Integration test suite
 
 If a real Sheet ID was pushed to GitHub in an older commit, removing it from the latest `Code.gs` only protects **future** clones. Options:
 
-1. **Recommended:** Restrict sheet sharing to trusted accounts; run `setSheetId()` in Apps Script so the live app does not depend on `FALLBACK_SHEET_ID`
+1. **Recommended:** Restrict sheet sharing to trusted accounts; set `EDITOR_SHEET_ID` in the Apps Script editor (not in git)
 2. **Optional:** Use [BFG Repo-Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) to purge the ID string from all commits, then `git push --force` (rewrites history)
 3. **Strict:** Create a new Google Sheet, migrate data, run `setSheetId()` with the new ID
 

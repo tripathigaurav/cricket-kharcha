@@ -7,8 +7,7 @@
 // 1. Create a Google Sheet
 // 2. Add 3 tabs: "Matches", "Payments", "Players"
 // 3. Open Extensions > Apps Script, paste this code
-// 4. Run setSheetId('YOUR_SHEET_ID') once in the editor (stores in Script Properties — do not commit ID to git)
-//    FALLBACK_SHEET_ID in this file stays empty in the public repo.
+// 4. In the Apps Script editor ONLY: set EDITOR_SHEET_ID below (leave empty in git — auto-used on first request)
 // 5. Set project timezone: File > Project properties > Asia/Kolkata
 // 6. Deploy > New Deployment > Web App > Anyone
 // 7. Copy the deployment URL into config.js
@@ -18,8 +17,9 @@ const MAX_NAME_LEN = 100;
 const MAX_FIELD_LEN = 200;
 const WRITE_TOKEN_LEN = 16;
 
-// Leave empty in git. Optional local-only fallback if you paste Code.gs without running setSheetId().
-const FALLBACK_SHEET_ID = '';
+// Set your Sheet ID here in the Apps Script editor ONLY — leave '' in the public git repo.
+// Example: '1-fc2qeYArJ7i5KmmT5xzytUdMOCzFGIayrYrezXZ3qE'
+const EDITOR_SHEET_ID = '';
 
 function isValidSheetId(id) {
   if (!id || typeof id !== 'string') return false;
@@ -43,14 +43,15 @@ function getSpreadsheet() {
     return active;
   }
 
-  // Editor / web-app fallback — set FALLBACK_SHEET_ID at top of this file
-  if (FALLBACK_SHEET_ID) {
-    props.setProperty('SHEET_ID', FALLBACK_SHEET_ID);
-    return SpreadsheetApp.openById(FALLBACK_SHEET_ID);
+  // Editor-only constant — set EDITOR_SHEET_ID once when you paste Code.gs (no separate run needed)
+  if (isValidSheetId(EDITOR_SHEET_ID)) {
+    id = EDITOR_SHEET_ID.trim();
+    props.setProperty('SHEET_ID', id);
+    return SpreadsheetApp.openById(id);
   }
 
   throw new Error(
-    'SHEET_ID not set. Run setSheetId("your-sheet-id") once in the Apps Script editor, ' +
+    'SHEET_ID not set. Set EDITOR_SHEET_ID at the top of Code.gs in the Apps Script editor, ' +
     'or open this project from the sheet via Extensions > Apps Script.'
   );
 }
@@ -67,15 +68,12 @@ function setSheetId(id) {
   PropertiesService.getScriptProperties().setProperty('SHEET_ID', String(id).trim());
 }
 
-/**
- * One-time setup helper. In the Apps Script editor only:
- * 1. Replace PASTE_YOUR_SHEET_ID with the ID from your sheet URL
- * 2. Run this function once
- * 3. Verify Project settings → Script properties shows SHEET_ID
- * Do not commit the real ID back to the public git repo.
- */
+/** Optional: copy EDITOR_SHEET_ID into Script Properties without waiting for a web request. */
 function configureSheetId() {
-  setSheetId('PASTE_YOUR_SHEET_ID');
+  if (!isValidSheetId(EDITOR_SHEET_ID)) {
+    throw new Error('Set EDITOR_SHEET_ID at the top of Code.gs in the Apps Script editor first.');
+  }
+  setSheetId(EDITOR_SHEET_ID);
 }
 
 function generateWriteToken() {
