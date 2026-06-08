@@ -50,7 +50,7 @@ async function run() {
   assert('Returns matches array', Array.isArray(list0.matches));
 
   console.log('\n── A2. Create Match (full fields)');
-  const c1 = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'Gaurav', payToUPI: 'gaurav@upi' });
+  const c1 = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'Admin', payToUPI: 'admin@upi' });
   assert('Success true', c1.success === true);
   assert('matchId is string', typeof c1.matchId === 'string' && c1.matchId.length > 0);
   const matchId = c1.matchId;
@@ -58,7 +58,7 @@ async function run() {
   console.log(`     matchId = ${matchId}`);
 
   console.log('\n── A3. Create Match (no UPI — optional field)');
-  const c2 = await post({ action: 'createMatch', date: '2026-06-01', payTo: 'Prashant' });
+  const c2 = await post({ action: 'createMatch', date: '2026-06-01', payTo: 'Player2' });
   assert('Match without UPI created', c2.success === true);
   createdMatchIds.push(c2.matchId);
 
@@ -66,8 +66,8 @@ async function run() {
   const fresh = await get('match', { id: matchId });
   assert('Match found', !!fresh.match);
   assert('Date format YYYY-MM-DD', fresh.match?.date === '2026-06-08');
-  assert('PayTo correct', fresh.match?.payTo === 'Gaurav');
-  assert('UPI correct', fresh.match?.payToUPI === 'gaurav@upi');
+  assert('PayTo correct', fresh.match?.payTo === 'Admin');
+  assert('UPI correct', fresh.match?.payToUPI === 'admin@upi');
   assert('Zero players', fresh.match?.players?.length === 0);
   assert('totalCost = 0', fresh.match?.totalCost === 0);
   assert('perPlayerCost = 0', fresh.match?.perPlayerCost === 0);
@@ -80,15 +80,15 @@ async function run() {
   // BLOCK B: Player Check-in
   // ══════════════════════════════════════════════════════════
   console.log('\n── B1. Manual check-in (4 players)');
-  for (const name of ['Shubham', 'Prashant', 'Adwitiya', 'Shivam']) {
+  for (const name of ['Player1', 'Player2', 'Player3', 'Player4']) {
     const r = await post({ action: 'checkIn', matchId, playerName: name });
     assert(`Check-in: ${name}`, r.success === true, JSON.stringify(r));
   }
 
   console.log('\n── B2. Duplicate protection');
-  assert('Exact dup blocked', !!(await post({ action: 'checkIn', matchId, playerName: 'Shubham' })).error);
-  assert('Lowercase dup blocked', !!(await post({ action: 'checkIn', matchId, playerName: 'shubham' })).error);
-  assert('Uppercase dup blocked', !!(await post({ action: 'checkIn', matchId, playerName: 'SHUBHAM' })).error);
+  assert('Exact dup blocked', !!(await post({ action: 'checkIn', matchId, playerName: 'Player1' })).error);
+  assert('Lowercase dup blocked', !!(await post({ action: 'checkIn', matchId, playerName: 'player1' })).error);
+  assert('Uppercase dup blocked', !!(await post({ action: 'checkIn', matchId, playerName: 'PLAYER1' })).error);
 
   console.log('\n── B3. Edge case names');
   assert('Empty name blocked', !!(await post({ action: 'checkIn', matchId, playerName: '' })).error);
@@ -99,8 +99,8 @@ async function run() {
   if (xssR.success) await post({ action: 'removePlayer', matchId, playerName: '<script>alert(1)</script>' });
 
   console.log('\n── B4. Match isolation');
-  await post({ action: 'checkIn', matchId: c2.matchId, playerName: 'Shubham' });
-  await post({ action: 'checkIn', matchId: c2.matchId, playerName: 'Gaurav' });
+  await post({ action: 'checkIn', matchId: c2.matchId, playerName: 'Player1' });
+  await post({ action: 'checkIn', matchId: c2.matchId, playerName: 'Admin' });
   const mIso2 = await get('match', { id: c2.matchId });
   assert('Second match has 2 players', mIso2.match?.players?.length === 2);
   const mIso1 = await get('match', { id: matchId });
@@ -140,7 +140,7 @@ async function run() {
   assert('All updated to ₹900', (await get('match', { id: matchId })).match?.players?.every(p => p.amountOwed === 900));
 
   console.log('\n── D4. Add 5th player after cost set → re-split');
-  const ci5 = await post({ action: 'checkIn', matchId, playerName: 'Jalpan' });
+  const ci5 = await post({ action: 'checkIn', matchId, playerName: 'Player5' });
   assert('Check-in after cost set works', ci5.success === true, JSON.stringify(ci5));
   const s5 = await post({ action: 'lockMatch', matchId, totalCost: 3600 });
   assert('Re-split with 5 players', s5.success === true && s5.playerCount === 5, `count=${s5.playerCount}`);
@@ -194,7 +194,7 @@ async function run() {
   assert('New split = ₹900 (4500÷5)', sAfter.perPlayerCost === 900, `got ${sAfter.perPlayerCost}`);
   const mE4 = await get('match', { id: matchId });
   assert('All amountOwed updated to ₹900', mE4.match?.players?.every(p => p.amountOwed === 900));
-  assert('Paid status preserved after cost change', mE4.match?.players?.find(p => p.name === 'Prashant')?.paid === true);
+  assert('Paid status preserved after cost change', mE4.match?.players?.find(p => p.name === 'Player2')?.paid === true);
 
   console.log('\n── E5. All players paid → zero remaining');
   for (const p of mE4.match?.players || []) {
@@ -206,12 +206,12 @@ async function run() {
   assert('Remaining = 0', mE5.match?.totalCost - mE5.match?.paidAmount === 0);
 
   console.log('\n── E6. Remove paid player (admin corrects roster)');
-  assert('Remove paid player succeeds', (await post({ action: 'removePlayer', matchId, playerName: 'Jalpan' })).success === true);
+  assert('Remove paid player succeeds', (await post({ action: 'removePlayer', matchId, playerName: 'Player5' })).success === true);
   assert('Now 4 players', (await get('match', { id: matchId })).match?.players?.length === 4);
 
   console.log('\n── E7. Payment edge cases');
   assert('Mark non-existent player returns error', !!(await post({ action: 'markPaid', matchId, playerName: 'Ghost', paid: true })).error);
-  assert('Mark wrong match returns error', !!(await post({ action: 'markPaid', matchId: 'fake', playerName: 'Shubham', paid: true })).error);
+  assert('Mark wrong match returns error', !!(await post({ action: 'markPaid', matchId: 'fake', playerName: 'Player1', paid: true })).error);
 
   // ══════════════════════════════════════════════════════════
   // BLOCK F: Player Stats (Cross-Match Aggregation)
@@ -220,9 +220,9 @@ async function run() {
   const stats = await get('players');
   assert('Returns array', Array.isArray(stats.players));
   assert('Has entries', (stats.players?.length || 0) >= 2);
-  const subStats = stats.players?.find(p => p.name?.toLowerCase() === 'shubham');
-  assert('Shubham in stats', !!subStats);
-  assert('Shubham in 2+ matches', (subStats?.matches || 0) >= 2, `got ${subStats?.matches}`);
+  const subStats = stats.players?.find(p => p.name?.toLowerCase() === 'player1');
+  assert('Player1 in stats', !!subStats);
+  assert('Player1 in 2+ matches', (subStats?.matches || 0) >= 2, `got ${subStats?.matches}`);
   assert('outstanding = owed - paid', subStats?.outstanding === (subStats?.totalOwed - subStats?.totalPaid));
 
   console.log('\n── F2. Stats fields complete');
@@ -265,7 +265,7 @@ async function run() {
   // BLOCK H: Historical & Multi-Match
   // ══════════════════════════════════════════════════════════
   console.log('\n── H1. Past match entry');
-  const cPast = await post({ action: 'createMatch', date: '2026-01-15', payTo: 'Gaurav', payToUPI: 'g@upi' });
+  const cPast = await post({ action: 'createMatch', date: '2026-01-15', payTo: 'Admin', payToUPI: 'admin@upi' });
   createdMatchIds.push(cPast.matchId);
   assert('Past date stored correctly', (await get('match', { id: cPast.matchId })).match?.date === '2026-01-15');
 

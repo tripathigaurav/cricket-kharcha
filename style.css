@@ -754,6 +754,29 @@ body {
   background: var(--red);
 }
 
+/* --- Delete Match --- */
+
+.delete-match-row {
+  padding: 8px 16px 16px;
+  text-align: right;
+}
+
+.btn-delete-match {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 0;
+  opacity: 0.6;
+}
+
+.btn-delete-match:hover,
+.btn-delete-match:active {
+  color: var(--red);
+  opacity: 1;
+}
+
 /* --- Utilities --- */
 
 .text-muted { color: var(--text-muted); }

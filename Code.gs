@@ -81,6 +81,9 @@ function doPost(e) {
       case 'markPaid':
         result = markPaid(body);
         break;
+      case 'deleteMatch':
+        result = deleteMatch(body);
+        break;
       default:
         result = { error: 'Unknown action: ' + action };
     }
@@ -380,6 +383,36 @@ function markPaid(body) {
   }
 
   return { error: 'Player not found in this match' };
+}
+
+// --- Delete Match ---
+
+function deleteMatch(body) {
+  var matchId = body.matchId;
+  if (!matchId) return { error: 'matchId required' };
+
+  var matchSheet = getSheet('Matches');
+  var matchData = matchSheet.getDataRange().getValues();
+  var matchRow = -1;
+  for (var i = 1; i < matchData.length; i++) {
+    if (matchData[i][0] === matchId) {
+      matchRow = i + 1; // 1-indexed
+      break;
+    }
+  }
+  if (matchRow === -1) return { error: 'Match not found' };
+
+  matchSheet.deleteRow(matchRow);
+
+  var paymentSheet = getSheet('Payments');
+  var paymentData = paymentSheet.getDataRange().getValues();
+  for (var j = paymentData.length - 1; j >= 1; j--) {
+    if (paymentData[j][0] === matchId) {
+      paymentSheet.deleteRow(j + 1);
+    }
+  }
+
+  return { success: true };
 }
 
 // --- Player Stats ---

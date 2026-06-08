@@ -12,18 +12,16 @@ let currentMatchId = null;
 // --- Demo Mode (in-memory mock backend) ---
 const _demo = {
   matches: [
-    { matchId: 'demo1', date: new Date().toISOString().split('T')[0], cricheroes: '', totalCost: 0, perPlayerCost: 0, playerCount: 0, payTo: 'Gaurav', payToUPI: 'gaurav@upi', status: 'checkin', paidCount: 0, paidAmount: 0 },
-    { matchId: 'demo0', date: '2026-05-31', cricheroes: '', totalCost: 3600, perPlayerCost: 200, playerCount: 18, payTo: 'Gaurav', payToUPI: 'gaurav@upi', status: 'locked', paidCount: 15, paidAmount: 3000 }
+    { matchId: 'demo0', date: '2026-05-31', cricheroes: '', totalCost: 1200, perPlayerCost: 200, playerCount: 6, payTo: 'Admin', payToUPI: 'admin@upi', status: 'locked', paidCount: 3, paidAmount: 600 }
   ],
   payments: {
-    demo1: [],
     demo0: [
-      { name: 'Shubham', playerId: 'p1', amountOwed: 200, paid: true, paidTimestamp: '2026-05-31T10:00:00Z' },
-      { name: 'Prashant', playerId: 'p2', amountOwed: 200, paid: true, paidTimestamp: '2026-05-31T10:05:00Z' },
-      { name: 'Shivam', playerId: 'p3', amountOwed: 200, paid: true, paidTimestamp: '2026-05-31T10:10:00Z' },
-      { name: 'Adwitiya', playerId: 'p4', amountOwed: 200, paid: false, paidTimestamp: '' },
-      { name: 'Prabhu', playerId: 'p5', amountOwed: 200, paid: false, paidTimestamp: '' },
-      { name: 'Jalpan', playerId: 'p6', amountOwed: 200, paid: false, paidTimestamp: '' }
+      { name: 'Player1', playerId: 'p1', amountOwed: 200, paid: true, paidTimestamp: '2026-05-31T10:00:00Z' },
+      { name: 'Player2', playerId: 'p2', amountOwed: 200, paid: true, paidTimestamp: '2026-05-31T10:05:00Z' },
+      { name: 'Player3', playerId: 'p3', amountOwed: 200, paid: true, paidTimestamp: '2026-05-31T10:10:00Z' },
+      { name: 'Player4', playerId: 'p4', amountOwed: 200, paid: false, paidTimestamp: '' },
+      { name: 'Player5', playerId: 'p5', amountOwed: 200, paid: false, paidTimestamp: '' },
+      { name: 'Player6', playerId: 'p6', amountOwed: 200, paid: false, paidTimestamp: '' }
     ]
   },
   nextId: () => Date.now().toString(36)
@@ -91,6 +89,8 @@ function demoApi(action, params) {
     }
     case 'scrape':
       return { error: 'CricHeroes scraping requires the live backend. Set up your Apps Script URL first.' };
+    case 'deleteMatch':
+      return { error: 'Delete is not available in demo mode.' };
     default:
       return { error: 'Unknown action: ' + action };
   }
@@ -422,6 +422,16 @@ async function handleRemovePlayer(name) {
 }
 
 // handleLockMatch removed — cost is now saved automatically via saveCost()
+
+// --- Delete Match ---
+async function handleDeleteMatch() {
+  if (IS_DEMO) return showToast('Delete not available in demo mode', true);
+  if (!confirm('Delete this match and all player data?\nThis cannot be undone.')) return;
+  const data = await api('deleteMatch', { matchId: currentMatchId }, 'POST');
+  if (data.error) return showToast(data.error, true);
+  showToast('Match deleted');
+  location.hash = '#/';
+}
 
 // --- Mark Paid ---
 async function togglePaid(playerName, paid) {
