@@ -226,21 +226,24 @@ function initSplash() {
 function updateModeBadge() {
   const badge = document.getElementById('mode-badge');
   if (!badge) return;
-  
-  const isAdmin = !!getAdminBypass();
-  const hasWrite = currentMatchId && hasWriteAccess(currentMatchId) && !isAdmin;
-  
-  if (isAdmin) {
+
+  const isGlobalAdmin = !!getAdminBypass();
+
+  if (isGlobalAdmin) {
     badge.textContent = 'Global Admin';
     badge.className = 'mode-badge admin';
     badge.style.display = '';
-  } else if (hasWrite) {
+    return;
+  }
+
+  if (currentMatchId && getWriteToken(currentMatchId)) {
     badge.textContent = 'Match Admin';
     badge.className = 'mode-badge match-admin';
     badge.style.display = '';
-  } else {
-    badge.style.display = 'none';
+    return;
   }
+
+  badge.style.display = 'none';
 }
 
 async function handleRoute() {
@@ -1094,6 +1097,20 @@ function updateSplitDoneButton(match) {
 function applyReadOnlyUI() {
   const pill = document.getElementById('readonly-pill');
   if (pill) pill.style.display = _canWrite ? 'none' : '';
+
+  const hint = document.getElementById('match-access-hint');
+  if (hint) {
+    if (getAdminBypass()) {
+      hint.textContent = 'Global Admin — full edit on all matches';
+      hint.className = 'match-access-hint hint-admin';
+    } else if (_canWrite) {
+      hint.textContent = 'Match Admin — you can edit this match';
+      hint.className = 'match-access-hint hint-match-admin';
+    } else {
+      hint.textContent = 'Player link — check in and tap ✓ when paid';
+      hint.className = 'match-access-hint hint-player';
+    }
+  }
 
   const costInput = document.getElementById('total-cost');
   if (costInput) {

@@ -687,6 +687,29 @@ textarea:focus {
 /* ---------- NEW MATCH FORM ---------- */
 .new-match-form { margin-top: 16px; }
 
+/* ---------- MATCH ACCESS HINT ---------- */
+.match-access-hint {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-align: center;
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  margin-bottom: 10px;
+}
+.hint-player {
+  color: var(--ink-low);
+  background: var(--surf-2);
+}
+.hint-match-admin {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+}
+.hint-admin {
+  color: #ffa500;
+  background: rgba(255, 165, 0, 0.1);
+}
+
 /* ---------- MATCH DETAIL: PAYMENT BAR ---------- */
 .payment-info-bar {
   position: relative;
