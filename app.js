@@ -207,6 +207,8 @@ function initSplash() {
 }
 
 function handleRoute() {
+  closeInfoModal();
+  closeShareMenu();
   clearTimeout(_costSaveTimer);
   _loadGeneration++;
 
@@ -1569,6 +1571,16 @@ function buildShareContent(match) {
   }
 
   return { shareTitle, body, msg: `${shareTitle}\n\n${body}`, url };
+}
+
+function openInfoModal() {
+  const modal = document.getElementById('info-modal');
+  if (modal) modal.style.display = '';
+}
+
+function closeInfoModal() {
+  const modal = document.getElementById('info-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 function openShareMenu() {

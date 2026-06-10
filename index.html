@@ -30,6 +30,11 @@
         <line x1="12" x2="12" y1="20" y2="4"/>
         <line x1="18" x2="18" y1="20" y2="10"/>
       </symbol>
+      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 16v-4"/>
+        <path d="M12 8h.01"/>
+      </symbol>
       <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M5 12h14"/>
         <path d="M12 5v14"/>
@@ -119,9 +124,14 @@
         <svg class="brand-logo" viewBox="0 0 32 32" aria-hidden="true"><use href="#logo-mark"/></svg>
         <span id="page-title" class="top-bar-title"><span id="page-title-text">CricTracker</span></span>
       </button>
-      <button id="btn-stats" class="btn-icon" onclick="navigate('#/stats')" title="Player Stats" aria-label="Player Stats">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stats"/></svg>
-      </button>
+      <div class="top-bar-actions">
+        <button id="btn-info" type="button" class="btn-icon" onclick="openInfoModal()" title="About" aria-label="About CricTracker">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-info"/></svg>
+        </button>
+        <button id="btn-stats" type="button" class="btn-icon" onclick="navigate('#/stats')" title="Player Stats" aria-label="Player Stats">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stats"/></svg>
+        </button>
+      </div>
     </header>
 
     <!-- Views -->
@@ -305,6 +315,44 @@
       </section>
 
     </main>
+
+    <!-- About -->
+    <div id="info-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeInfoModal()">
+      <div class="modal-card info-modal-card" role="dialog" aria-labelledby="info-modal-title">
+        <div class="info-modal-header">
+          <div class="info-logo">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><use href="#logo-mark"/></svg>
+          </div>
+          <h3 id="info-modal-title">CricTracker</h3>
+          <p class="info-version">v1.0</p>
+        </div>
+        <p class="info-tagline">Weekend cricket payments made simple. Split ground costs, track who's paid, share with your squad.</p>
+        <div class="info-features">
+          <div class="info-feature">
+            <span class="info-feature-icon">🏏</span>
+            <span class="info-feature-text">Auto-split costs equally or set custom amounts</span>
+          </div>
+          <div class="info-feature">
+            <span class="info-feature-icon">✓</span>
+            <span class="info-feature-text">Players mark themselves paid via shared link</span>
+          </div>
+          <div class="info-feature">
+            <span class="info-feature-icon">📊</span>
+            <span class="info-feature-text">Track all-time stats across matches</span>
+          </div>
+        </div>
+        <div class="info-credit">
+          <div class="credit-card">
+            <div class="credit-avatar" aria-hidden="true">GT</div>
+            <div class="credit-text">
+              <span class="credit-label">Vibe coded by</span>
+              <span class="credit-name">Gaurav Tripathi</span>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-block" onclick="closeInfoModal()">Close</button>
+      </div>
+    </div>
 
     <!-- Share menu -->
     <div id="share-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeShareMenu()">
