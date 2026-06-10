@@ -3,6 +3,11 @@ config.js
 
 # OS / editor
 .DS_Store
+Thumbs.db
 *.swp
+*.log
+.env
+.env.*
 .idea/
 .vscode/
+node_modules/

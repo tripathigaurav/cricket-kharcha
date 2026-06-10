@@ -1,7 +1,7 @@
 // Player link: mark paid on/off without write token
 let BASE;
 try {
-  const cfg = require('./config.js');
+  const cfg = require('../config.js');
   BASE = process.env.CRICKET_TEST_API_URL || cfg.CRICKET_TEST_API_URL || cfg.CRICKET_API_URL;
 } catch (e) {
   BASE = process.env.CRICKET_API_URL || '';
@@ -50,11 +50,17 @@ async function run() {
   let m1 = await get('match', { id: matchId });
   assert('Paid is true', m1.match?.players?.[0]?.paid === true);
 
-  const markOffPlayer = await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: false });
-  assert('Player link marks paid OFF (no token)', markOffPlayer.success === true, JSON.stringify(markOffPlayer));
+  const markOffNoToken = await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: false });
+  assert('Player link un-mark rejected (no token)', !!markOffNoToken.error, JSON.stringify(markOffNoToken));
+
+  const m1b = await get('match', { id: matchId });
+  assert('Still paid after rejected un-mark', m1b.match?.players?.[0]?.paid === true);
+
+  const markOffWithToken = await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: false }, token);
+  assert('Admin un-mark succeeds (with token)', markOffWithToken.success === true, JSON.stringify(markOffWithToken));
 
   const m2 = await get('match', { id: matchId });
-  assert('Paid is false', m2.match?.players?.[0]?.paid === false);
+  assert('Paid is false after admin un-mark', m2.match?.players?.[0]?.paid === false);
 
   const lockNoToken = await post({ action: 'lockMatch', matchId, totalCost: 2000 });
   assert('Player link still cannot lock cost', !!lockNoToken.error);

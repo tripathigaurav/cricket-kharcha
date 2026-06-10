@@ -36,7 +36,7 @@ No build step, no npm, no framework — static HTML/JS/CSS + Apps Script.
 
 ### 1. Google Sheet
 
-1. Create a new Google Sheet (use a **separate sheet for testing** if you run `node test.js`)
+1. Create a new Google Sheet (use a **separate sheet for testing** if you run `npm test`)
 2. Add 3 tabs named exactly: `Matches`, `Payments`, `Players`
 3. Note the Sheet ID from the URL: `https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit`
 
@@ -100,13 +100,17 @@ Tests hit the Apps Script API and auto-delete matches they create.
 const CRICKET_TEST_API_URL = 'https://script.google.com/macros/s/.../exec';
 
 # or via env
-CRICKET_TEST_API_URL='...' node test.js
+CRICKET_TEST_API_URL='...' npm test
 ```
 
-To run against production (not recommended): `CRICKET_ALLOW_PROD_TESTS=1 node test.js`
+To run against production (not recommended): `CRICKET_ALLOW_PROD_TESTS=1 npm test`
 
 ```bash
-node test.js
+npm test                  # full integration suite (auto-purges test data at end)
+npm run test:cleanup      # remove leftover test matches/players only
+npm run test:split        # exact-split tests
+npm run test:player-link  # player link / mark-paid tests
+npm run test:cricheroes   # CricHeroes scrape tests
 ```
 
 ---
@@ -116,12 +120,17 @@ node test.js
 ```
 index.html        # SPA shell — views (home, new match, match detail, stats)
 app.js            # Frontend — routing, API, DOM
+sw.js             # Service worker (caches static assets)
 style.css         # Mobile-first styles
 config.example.js # Template for config.js (gitignored)
+config.deploy.js  # Production API URL for GitHub Pages
 manifest.json     # PWA manifest
-Code.gs           # Google Apps Script backend (deploy manually)
-test.js           # Integration test suite
+Code.gs           # Google Apps Script backend (single file — deploy manually)
+package.json      # npm test scripts
+test/             # Node integration tests
 ```
+
+**Version:** keep `APP_VERSION` in `app.js` and `CACHE_NAME` in `sw.js` in sync with `package.json` when releasing.
 
 ---
 
@@ -153,4 +162,5 @@ If a real Sheet ID was pushed to GitHub in an older commit, removing it from the
 3. Run `backfillWriteTokens()` once if any existing matches have an empty WriteToken column — then re-share admin `?w=` links for those matches
 4. **Deploy → Manage deployments → Edit → New version → Deploy**
 5. If `config.js` was ever committed: rotate the Apps Script deployment URL and update local `config.js` (old URL remains in git history)
-6. Verify with `node test.js` against your test deployment
+6. Verify with `npm test` against your test deployment
+7. Push frontend (`app.js`, `sw.js`, `index.html`, `style.css`) to GitHub Pages

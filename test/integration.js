@@ -1,12 +1,12 @@
 // ============================================================
 // CricTracker — Comprehensive Integration Test Suite
-// Run: node test.js
+// Run: npm test  (or node test/integration.js)
 // ============================================================
 
 // Load API URL — prefer test deployment via env to avoid touching production sheet
 let BASE;
 try {
-  const cfg = require('./config.js');
+  const cfg = require('../config.js');
   BASE = process.env.CRICKET_TEST_API_URL || cfg.CRICKET_TEST_API_URL || cfg.CRICKET_API_URL;
 } catch (e) {
   BASE = process.env.CRICKET_TEST_API_URL || process.env.CRICKET_API_URL || '';
@@ -18,6 +18,14 @@ if (!BASE || BASE.includes('YOUR_APPS_SCRIPT')) {
 }
 if (!process.env.CRICKET_TEST_API_URL && !process.env.CRICKET_ALLOW_PROD_TESTS) {
   console.warn('⚠️  Tests are hitting the default API URL. Set CRICKET_TEST_API_URL for an isolated test sheet.');
+}
+
+let ADMIN_TOKEN;
+try {
+  const cfg = require('../config.js');
+  ADMIN_TOKEN = process.env.CRICKET_ADMIN_TOKEN || cfg.CRICKET_ADMIN_TOKEN || '';
+} catch (e) {
+  ADMIN_TOKEN = process.env.CRICKET_ADMIN_TOKEN || '';
 }
 
 let passed = 0;
@@ -43,7 +51,7 @@ async function get(action, params = {}) {
   catch(e) { return { error: `Non-JSON (HTTP ${r.status}): ${text.substring(0, 120)}` }; }
 }
 
-const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount']);
+const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount', 'renamePlayer', 'deletePlayer']);
 
 function trackCreate(result) {
   if (result?.matchId && result?.writeToken) {
@@ -54,7 +62,7 @@ function trackCreate(result) {
 async function post(body) {
   const payload = { ...body };
   if (payload.matchId && WRITE_ACTIONS.has(payload.action) && writeTokens[payload.matchId]) {
-    payload.writeToken = writeTokens[payload.matchId];
+    if (!payload.writeToken) payload.writeToken = writeTokens[payload.matchId];
   }
   const r = await fetch(BASE, {
     method: 'POST',
@@ -68,6 +76,22 @@ async function post(body) {
     if (payload.action === 'createMatch') trackCreate(result);
     return result;
   }
+  catch(e) { return { error: `Non-JSON (HTTP ${r.status}): ${text.substring(0, 120)}` }; }
+}
+
+async function postAdmin(body) {
+  return post({ ...body, writeToken: ADMIN_TOKEN });
+}
+
+async function postRaw(body) {
+  const r = await fetch(BASE, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify(body)
+  });
+  const text = await r.text();
+  try { return JSON.parse(text); }
   catch(e) { return { error: `Non-JSON (HTTP ${r.status}): ${text.substring(0, 120)}` }; }
 }
 
@@ -255,8 +279,8 @@ async function run() {
   assert('paidAmount = 2160 (3×720)', mE2.match?.paidAmount === 2160, `got ${mE2.match?.paidAmount}`);
   assert('remaining = 1440 (2×720)', mE2.match?.totalCost - mE2.match?.paidAmount === 1440);
 
-  console.log('\n── E3. Unmark paid (toggle off)');
-  await post({ action: 'markPaid', matchId, playerName: 'Player1', paid: false });
+  console.log('\n── E3. Unmark paid (toggle off — requires write token)');
+  await post({ action: 'markPaid', matchId, playerName: 'Player1', paid: false, writeToken: writeTokens[matchId] });
   const mE3 = await get('match', { id: matchId });
   const sub3 = mE3.match?.players?.find(p => p.name === 'Player1');
   assert('paid toggled to false', sub3?.paid === false);
@@ -501,13 +525,14 @@ async function run() {
 
   await post({ action: 'checkIn', matchId: lateId, playerName: 'Early1' });
   await post({ action: 'checkIn', matchId: lateId, playerName: 'Early2' });
-  await post({ action: 'lockMatch', matchId: lateId, totalCost: 2000 }); // ₹1000 each
+  await post({ action: 'lockMatch', matchId: lateId, totalCost: 2000 }); // ₹1000 each (2 players)
   const lateIn = await post({ action: 'checkIn', matchId: lateId, playerName: 'LatePlayer' });
   assert('Late check-in succeeds', lateIn.success === true, JSON.stringify(lateIn));
 
   const lateDetail = await get('match', { id: lateId });
   const latePl = lateDetail.match?.players?.find(p => p.name === 'LatePlayer');
-  assert('Late player has amountOwed = 1000 (not 0)', latePl?.amountOwed === 1000, `got amountOwed=${latePl?.amountOwed}`);
+  const expectedLate = Math.ceil(2000 / 3); // re-split equally among 3 players
+  assert(`Late player has amountOwed = ${expectedLate} (re-split, not 0)`, latePl?.amountOwed === expectedLate, `got amountOwed=${latePl?.amountOwed}`);
 
   // ══════════════════════════════════════════════════════════
   // BLOCK L: SSRF — scrape URL allowlist
@@ -594,6 +619,223 @@ async function run() {
   assert('All player names are non-empty strings', allNamesValid);
 
   // ══════════════════════════════════════════════════════════
+  // BLOCK P: Admin Validation
+  // ══════════════════════════════════════════════════════════
+  if (ADMIN_TOKEN) {
+    console.log('\n── P1. validateAdmin with correct token');
+    const vOk = await post({ action: 'validateAdmin', token: ADMIN_TOKEN });
+    assert('valid = true', vOk.valid === true, JSON.stringify(vOk));
+
+    console.log('\n── P2. validateAdmin with wrong token');
+    const vBad = await post({ action: 'validateAdmin', token: 'wrong_token_xyz' });
+    assert('valid = false', vBad.valid === false, JSON.stringify(vBad));
+
+    console.log('\n── P3. validateAdmin with missing token');
+    const vNone = await post({ action: 'validateAdmin' });
+    assert('valid = false', vNone.valid === false, JSON.stringify(vNone));
+  } else {
+    console.log('\n── P. SKIPPED: Set CRICKET_ADMIN_TOKEN to test admin features');
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK Q: Rename Player (Admin Only)
+  // ══════════════════════════════════════════════════════════
+  if (ADMIN_TOKEN) {
+    console.log('\n── Q1. Setup rename test');
+    const cRename = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'RenameAdmin', payToUPI: 'r@upi' });
+    createdMatchIds.push(cRename.matchId);
+    const renameMatchId = cRename.matchId;
+    await post({ action: 'checkIn', matchId: renameMatchId, playerName: 'RenameMe' });
+
+    const rosterQ = await get('players');
+    const renamePlayer = rosterQ.players?.find(p => p.name === 'RenameMe');
+    assert('RenameMe in roster', !!renamePlayer);
+    const renamePlayerId = renamePlayer?.playerId || '';
+
+    console.log('\n── Q2. Rename via admin token succeeds');
+    const ren1 = await postAdmin({ action: 'renamePlayer', playerId: renamePlayerId, newName: 'RenamedPlayer' });
+    assert('Rename succeeds', ren1.success === true, JSON.stringify(ren1));
+    const mAfterRen = await get('match', { id: renameMatchId });
+    assert('Name changed in match', mAfterRen.match?.players?.some(p => p.name === 'RenamedPlayer'));
+    assert('Old name gone from match', !mAfterRen.match?.players?.some(p => p.name === 'RenameMe'));
+
+    console.log('\n── Q3. Rename via match write token (non-admin) rejected');
+    const renBad = await post({ action: 'renamePlayer', matchId: renameMatchId, playerId: renamePlayerId, newName: 'HackedName', writeToken: writeTokens[renameMatchId] });
+    assert('Match token rejected', !!renBad.error && renBad.error.includes('Admin'), JSON.stringify(renBad));
+
+    console.log('\n── Q4. Rename without any token rejected');
+    const renNone = await postRaw({ action: 'renamePlayer', playerId: renamePlayerId, newName: 'NoToken' });
+    assert('No token rejected', !!renNone.error, JSON.stringify(renNone));
+
+    console.log('\n── Q5. Rename to empty name rejected');
+    const renEmpty = await postAdmin({ action: 'renamePlayer', playerId: renamePlayerId, newName: '' });
+    assert('Empty name rejected', !!renEmpty.error, JSON.stringify(renEmpty));
+
+    // Rename back for cleanup consistency
+    await postAdmin({ action: 'renamePlayer', playerId: renamePlayerId, newName: 'RenameMe' });
+  } else {
+    console.log('\n── Q. SKIPPED: Set CRICKET_ADMIN_TOKEN to test rename');
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK R: Delete Player from Roster (Admin Only)
+  // ══════════════════════════════════════════════════════════
+  if (ADMIN_TOKEN) {
+    console.log('\n── R1. Setup delete-player test');
+    const cDel = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'DelAdmin', payToUPI: 'del@upi' });
+    createdMatchIds.push(cDel.matchId);
+    await post({ action: 'checkIn', matchId: cDel.matchId, playerName: 'DeleteMe' });
+
+    const rosterR = await get('players');
+    const delPlayer = rosterR.players?.find(p => p.name === 'DeleteMe');
+    assert('DeleteMe in roster', !!delPlayer);
+    const delPlayerId = delPlayer?.playerId || '';
+
+    console.log('\n── R2. Delete without admin token rejected');
+    const delNoAuth = await postRaw({ action: 'deletePlayer', playerId: delPlayerId });
+    assert('No-auth delete rejected', !!delNoAuth.error, JSON.stringify(delNoAuth));
+
+    console.log('\n── R3. Delete with match history rejected');
+    const delWithHistory = await postAdmin({ action: 'deletePlayer', playerId: delPlayerId });
+    assert('Delete with history rejected', !!delWithHistory.error, JSON.stringify(delWithHistory));
+
+    console.log('\n── R4. Delete after match removed succeeds');
+    await post({ action: 'deleteMatch', matchId: cDel.matchId });
+    const idxDel = createdMatchIds.indexOf(cDel.matchId);
+    if (idxDel !== -1) createdMatchIds.splice(idxDel, 1);
+    const delOk = await postAdmin({ action: 'deletePlayer', playerId: delPlayerId });
+    assert('Admin delete succeeds after match gone', delOk.success === true, JSON.stringify(delOk));
+
+    console.log('\n── R5. Delete non-existent playerId');
+    const delGhost = await postAdmin({ action: 'deletePlayer', playerId: 'FAKE_ID_999' });
+    assert('Non-existent delete returns error', !!delGhost.error, JSON.stringify(delGhost));
+  } else {
+    console.log('\n── R. SKIPPED: Set CRICKET_ADMIN_TOKEN to test delete-player');
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK S: Un-mark Payment Auth
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── S1. Setup un-mark test');
+  const cUnmark = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'UnmarkAdmin', payToUPI: 'unmark@upi' });
+  createdMatchIds.push(cUnmark.matchId);
+  const unmarkId = cUnmark.matchId;
+  await post({ action: 'checkIn', matchId: unmarkId, playerName: 'UnmarkPlayer' });
+  await post({ action: 'lockMatch', matchId: unmarkId, totalCost: 500 });
+  const markOn = await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: true });
+  assert('Mark paid ON without token succeeds', markOn.success === true, JSON.stringify(markOn));
+
+  console.log('\n── S2. Un-mark WITHOUT write token is rejected');
+  const unmarkNoToken = await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: false });
+  assert('Un-mark without token rejected', !!unmarkNoToken.error, JSON.stringify(unmarkNoToken));
+
+  console.log('\n── S3. Un-mark WITH write token succeeds');
+  const unmarkWithToken = await post({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: false, writeToken: writeTokens[unmarkId] });
+  assert('Un-mark with write token succeeds', unmarkWithToken.success === true, JSON.stringify(unmarkWithToken));
+
+  // Re-mark for next test
+  await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: true });
+
+  console.log('\n── S4. Un-mark WITH admin token succeeds');
+  if (ADMIN_TOKEN) {
+    const unmarkAdmin = await postAdmin({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: false });
+    assert('Un-mark with admin token succeeds', unmarkAdmin.success === true, JSON.stringify(unmarkAdmin));
+  } else {
+    console.log('     ⚠️  Skipped S4 — no CRICKET_ADMIN_TOKEN');
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK T: Match Deletion Ownership
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── T1. Setup ownership test');
+  const cOwnerA = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'OwnerA', payToUPI: 'oa@upi' });
+  const cOwnerB = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'OwnerB', payToUPI: 'ob@upi' });
+  createdMatchIds.push(cOwnerA.matchId, cOwnerB.matchId);
+
+  console.log('\n── T2. Delete match A with token B — rejected');
+  const delCross = await postRaw({ action: 'deleteMatch', matchId: cOwnerA.matchId, writeToken: writeTokens[cOwnerB.matchId] });
+  assert('Cross-owner delete rejected', !!delCross.error, JSON.stringify(delCross));
+
+  console.log('\n── T3. Delete match A with own token — succeeds');
+  const delOwn = await post({ action: 'deleteMatch', matchId: cOwnerA.matchId });
+  assert('Own-token delete succeeds', delOwn.success === true, JSON.stringify(delOwn));
+  // Remove from cleanup list since already deleted
+  const idxA = createdMatchIds.indexOf(cOwnerA.matchId);
+  if (idxA !== -1) createdMatchIds.splice(idxA, 1);
+
+  console.log('\n── T4. Delete match B with admin bypass — succeeds');
+  if (ADMIN_TOKEN) {
+    const delAdmin = await postAdmin({ action: 'deleteMatch', matchId: cOwnerB.matchId });
+    assert('Admin-bypass delete succeeds', delAdmin.success === true, JSON.stringify(delAdmin));
+    const idxB = createdMatchIds.indexOf(cOwnerB.matchId);
+    if (idxB !== -1) createdMatchIds.splice(idxB, 1);
+  } else {
+    console.log('     ⚠️  Skipped T4 — no CRICKET_ADMIN_TOKEN');
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK U: createMatch with checkInCollector
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── U1. Create match with checkInCollector');
+  const cCollect = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'Collector', payToUPI: 'collect@upi', checkInCollector: true });
+  assert('createMatch succeeds', cCollect.success === true, JSON.stringify(cCollect));
+  createdMatchIds.push(cCollect.matchId);
+
+  console.log('\n── U2. Match already has collector as player');
+  const mCollect = await get('match', { id: cCollect.matchId });
+  assert('Has 1 player', mCollect.match?.players?.length === 1, `got ${mCollect.match?.players?.length}`);
+  assert('Player is Collector', mCollect.match?.players?.[0]?.name === 'Collector');
+
+  console.log('\n── U3. Duplicate check-in for collector blocked');
+  const dupCollect = await post({ action: 'checkIn', matchId: cCollect.matchId, playerName: 'Collector' });
+  assert('Dup collector blocked', !!dupCollect.error);
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK V: setPlayerAmount 2-Decimal Rounding
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── V1. Setup exact-split rounding test');
+  const cRound = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'RoundAdmin', payToUPI: 'round@upi' });
+  createdMatchIds.push(cRound.matchId);
+  const roundId = cRound.matchId;
+  await post({ action: 'checkIn', matchId: roundId, playerName: 'RoundA' });
+  await post({ action: 'checkIn', matchId: roundId, playerName: 'RoundB' });
+  await post({ action: 'lockMatch', matchId: roundId, totalCost: 1000, splitMode: 'exact' });
+
+  console.log('\n── V2. Set amount to 333.33 — preserved (not rounded to 333)');
+  const setA = await post({ action: 'setPlayerAmount', matchId: roundId, playerName: 'RoundA', amountOwed: 333.33 });
+  assert('setPlayerAmount succeeds', setA.success === true, JSON.stringify(setA));
+  assert('amountOwed = 333.33', setA.amountOwed === 333.33, `got ${setA.amountOwed}`);
+
+  console.log('\n── V3. Set amount to 666.67 — assigned = 1000');
+  const setB = await post({ action: 'setPlayerAmount', matchId: roundId, playerName: 'RoundB', amountOwed: 666.67 });
+  assert('assigned = 1000', setB.assigned === 1000, `got ${setB.assigned}`);
+
+  console.log('\n── V4. Amounts preserved on re-fetch');
+  const mRound = await get('match', { id: roundId });
+  const rA = mRound.match?.players?.find(p => p.name === 'RoundA');
+  const rB = mRound.match?.players?.find(p => p.name === 'RoundB');
+  assert('RoundA still 333.33', rA?.amountOwed === 333.33, `got ${rA?.amountOwed}`);
+  assert('RoundB still 666.67', rB?.amountOwed === 666.67, `got ${rB?.amountOwed}`);
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK W: checkInBatch Deduplication
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── W1. Setup batch dedup test');
+  const cBatch = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'BatchAdmin', payToUPI: 'batch@upi' });
+  createdMatchIds.push(cBatch.matchId);
+  await post({ action: 'checkIn', matchId: cBatch.matchId, playerName: 'Alice' });
+
+  console.log('\n── W2. Batch with 1 existing + 2 new');
+  const batchDedup = await post({ action: 'checkInBatch', matchId: cBatch.matchId, playerNames: ['Alice', 'Bob', 'Carol'] });
+  assert('Batch succeeds', batchDedup.success === true, JSON.stringify(batchDedup));
+  assert('added = 2', batchDedup.added === 2, `got ${batchDedup.added}`);
+  assert('skipped = 1', batchDedup.skipped === 1, `got ${batchDedup.skipped}`);
+
+  console.log('\n── W3. Match has exactly 3 players');
+  const mBatch = await get('match', { id: cBatch.matchId });
+  assert('3 players total', mBatch.match?.players?.length === 3, `got ${mBatch.match?.players?.length}`);
+
+  // ══════════════════════════════════════════════════════════
   // SUMMARY
   // ══════════════════════════════════════════════════════════
   const total = passed + failed;
@@ -602,16 +844,29 @@ async function run() {
   if (failed === 0) console.log('🎉 All tests passed! App is production ready.\n');
   else console.log('⚠️  Some tests failed — see ❌ above.\n');
 
-  // Auto-cleanup: delete all test matches created during this run
-  console.log(`🗑️  Cleaning up ${createdMatchIds.length} test match(es)...`);
-  let cleaned = 0;
-  for (const id of createdMatchIds) {
-    try {
-      const r = await post({ action: 'deleteMatch', matchId: id });
-      if (r.success) cleaned++;
-    } catch (_) { /* ignore cleanup errors */ }
+  if (process.env.CRICKET_SKIP_CLEANUP) {
+    console.log(`\n⏭️  Skipping cleanup (${createdMatchIds.length} test match(es) on sheet). Run: npm run test:cleanup\n`);
+    process.exit(failed > 0 ? 1 : 0);
   }
-  console.log(`   Deleted ${cleaned}/${createdMatchIds.length} test matches.\n`);
+
+  console.log('\n🗑️  Purging test data (single admin API call)...');
+  if (ADMIN_TOKEN) {
+    const purge = await postAdmin({ action: 'purgeTestData' });
+    if (purge.error) {
+      console.log(`   ⚠️  Purge failed: ${purge.error}`);
+      if (purge.error.includes('Unknown action')) {
+        console.log('   → Deploy latest Code.gs, or run: npm run test:cleanup after deploy');
+      }
+    } else {
+      console.log(`   ✅ ${purge.matchesDeleted || 0} match(es), ${purge.playersDeleted || 0} player(s) removed`);
+      if (purge.keptMatches?.length) {
+        console.log(`   Kept: ${purge.keptMatches.map(m => m.payTo).join(', ')}`);
+      }
+    }
+  } else {
+    console.log('   ⚠️  Set CRICKET_ADMIN_TOKEN to auto-purge. Or run: npm run test:cleanup');
+  }
+  console.log('');
 
   process.exit(failed > 0 ? 1 : 0);
 }

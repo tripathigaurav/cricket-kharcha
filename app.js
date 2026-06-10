@@ -2,8 +2,15 @@
 // CricTracker — Frontend App
 // ============================================================
 
+const APP_VERSION = '1.1.0';
+
+function haptic(pattern) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {}
+}
+const HAPTIC = { tick: 10, confirm: 30, success: [50, 30, 50] };
+
 const API_URL = (typeof CRICKET_API_URL !== 'undefined') ? CRICKET_API_URL : '';
-const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount']);
+const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount', 'renamePlayer', 'deletePlayer']);
 const UPI_VPA_RE = /^[\w.\-]{2,}@[a-z]{2,}$/i;
 const UPI_PHONE_RE = /^\d{10}$/;
 
@@ -17,6 +24,7 @@ let currentMatchId = null;
 let _currentMatch = null;
 let _costSaveTimer = null;
 let _lastPersistedCost = null;
+let _costBlockedValue = null;
 let _loadGeneration = 0;
 let _knownPlayers = [];
 let _knownPlayersPromise = null;
@@ -25,6 +33,8 @@ let _writeToken = null;
 let _canWrite = true;
 const _markPaidPending = new Set();
 let _checkInPending = false;
+const _pickerSelectedMatch = new Set();
+const _pickerSelectedNew = new Set();
 let _matchListCache = null;
 let _matchListCacheTime = 0;
 const MATCH_LIST_CACHE_MS = 15000;
@@ -89,7 +99,7 @@ function buildMatchHash(matchId) {
 function parseMatchRoute(hash) {
   const rest = (hash || '').replace(/^#\/match\//, '');
   const [idPart, query] = rest.split('?');
-  const matchId = decodeURIComponent((idPart || '').split('#')[0]);
+  const matchId = decodeURIComponent((idPart || '').split('#')[0]).replace(/\/+$/, '');
   let writeToken = null;
   let adminBypass = null;
   if (query) {
@@ -156,7 +166,14 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function warmApiContainer() {
+  if (!API_URL || API_URL.includes('YOUR_APPS_SCRIPT')) return;
+  fetch(`${API_URL}?action=matches`, { redirect: 'follow' }).catch(() => {});
+}
+
 function initSplash() {
+  warmApiContainer();
+
   const splash = document.getElementById('splash');
   const app = document.getElementById('app');
   if (!splash) {
@@ -206,85 +223,201 @@ function initSplash() {
   setTimeout(finish, maxMs);
 }
 
-function handleRoute() {
+function updateModeBadge() {
+  const badge = document.getElementById('mode-badge');
+  if (!badge) return;
+  
+  const isAdmin = !!getAdminBypass();
+  const hasWrite = currentMatchId && hasWriteAccess(currentMatchId) && !isAdmin;
+  
+  if (isAdmin) {
+    badge.textContent = 'Global Admin';
+    badge.className = 'mode-badge admin';
+    badge.style.display = '';
+  } else if (hasWrite) {
+    badge.textContent = 'Match Admin';
+    badge.className = 'mode-badge match-admin';
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function handleRoute() {
   closeInfoModal();
   closeShareMenu();
   clearTimeout(_costSaveTimer);
   _loadGeneration++;
 
   const hash = window.location.hash || '#/';
-  const views = document.querySelectorAll('.view');
-  views.forEach(v => { v.style.display = 'none'; v.classList.remove('view-enter'); });
 
-  const backBtn = document.getElementById('btn-back');
-  const statsBtn = document.getElementById('btn-stats');
-
-  backBtn.style.display = 'none';
-  statsBtn.style.display = '';
-  setPageTitle('CricTracker');
-
-  hideSuggestions();
-
-  let activeView;
-  if (hash === '#/' || hash === '#' || hash === '') {
-    activeView = document.getElementById('view-home');
-    activeView.style.display = '';
-    loadMatches();
-  } else if (hash === '#/new') {
-    activeView = document.getElementById('view-new');
-    activeView.style.display = '';
-    backBtn.style.display = '';
-    setPageTitle('New Match');
-    document.getElementById('match-date').value = todayISO();
-    document.getElementById('pay-to').value = '';
-    document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
-    const costField = document.getElementById('new-match-cost');
-    if (costField) costField.value = '';
-  } else if (hash.startsWith('#/admin_')) {
-    storeAdminBypass(hash.replace(/^#\//, ''));
-    showToast('Admin mode on — open any match');
+  // Admin token validation — runs before any view transition
+  if (hash.startsWith('#/admin_')) {
+    const token = hash.replace(/^#\//, '');
+    const check = await api('validateAdmin', { token }, 'POST');
+    if (check.valid) {
+      storeAdminBypass(token);
+      showToast('Admin mode on — open any match');
+    } else {
+      showToast('Invalid admin token', 'error');
+    }
     navigate('#/');
     return;
-  } else if (hash.startsWith('#/match/')) {
-    activeView = document.getElementById('view-match');
-    activeView.style.display = '';
-    backBtn.style.display = '';
-    setPageTitle('Match');
-    const route = parseMatchRoute(hash);
-    currentMatchId = route.matchId;
-    if (route.adminBypass) storeAdminBypass(route.adminBypass);
-    if (route.writeToken) {
-      storeWriteToken(route.matchId, route.writeToken);
-    } else if (!getAdminBypass()) {
-      const stored = getWriteToken(route.matchId);
-      if (stored) history.replaceState(null, '', buildMatchHash(route.matchId));
-    }
-    loadMatch(currentMatchId);
-  } else if (hash === '#/stats') {
-    activeView = document.getElementById('view-stats');
-    activeView.style.display = '';
-    backBtn.style.display = '';
-    statsBtn.style.display = 'none';
-    setPageTitle('Player Stats');
-    loadStats();
-  } else {
-    activeView = document.getElementById('view-home');
-    activeView.style.display = '';
-    loadMatches();
   }
 
-  if (activeView) {
-    requestAnimationFrame(() => activeView.classList.add('view-enter'));
+  const applyRoute = () => {
+    if (!hash.startsWith('#/match/')) currentMatchId = null;
+    const views = document.querySelectorAll('.view');
+    views.forEach(v => { v.style.display = 'none'; v.classList.remove('view-enter'); });
+
+    const backBtn = document.getElementById('btn-back');
+    const statsBtn = document.getElementById('btn-stats');
+
+    backBtn.style.display = 'none';
+    statsBtn.style.display = '';
+    setPageTitle('CricTracker');
+
+    hideSuggestions();
+    updateModeBadge();
+
+    let activeView;
+    if (hash === '#/' || hash === '#' || hash === '') {
+      activeView = document.getElementById('view-home');
+      activeView.style.display = '';
+      loadMatches();
+    } else if (hash === '#/new') {
+      activeView = document.getElementById('view-new');
+      activeView.style.display = '';
+      backBtn.style.display = '';
+      setPageTitle('New Match');
+      document.getElementById('match-date').value = todayISO();
+      document.getElementById('pay-to').value = '';
+      document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
+      const costField = document.getElementById('new-match-cost');
+      if (costField) costField.value = '';
+      const accentPicker = document.getElementById('accent-picker');
+      if (accentPicker) {
+        accentPicker.querySelectorAll('.accent-swatch').forEach(s => s.classList.remove('active'));
+        accentPicker.querySelector('[data-color=""]')?.classList.add('active');
+      }
+      _pickerSelectedNew.clear();
+      renderNewMatchPickerTags();
+      ensureKnownPlayers();
+    } else if (hash.startsWith('#/match/')) {
+      activeView = document.getElementById('view-match');
+      activeView.style.display = '';
+      backBtn.style.display = '';
+      setPageTitle('Match');
+      const route = parseMatchRoute(hash);
+      currentMatchId = route.matchId;
+      if (route.adminBypass) storeAdminBypass(route.adminBypass);
+      if (route.writeToken) {
+        storeWriteToken(route.matchId, route.writeToken);
+      } else if (!getAdminBypass()) {
+        const stored = getWriteToken(route.matchId);
+        if (stored) history.replaceState(null, '', buildMatchHash(route.matchId));
+      }
+      loadMatch(currentMatchId);
+    } else if (hash === '#/stats') {
+      activeView = document.getElementById('view-stats');
+      activeView.style.display = '';
+      backBtn.style.display = '';
+      statsBtn.style.display = 'none';
+      setPageTitle('Player Stats');
+      loadStats();
+    } else {
+      activeView = document.getElementById('view-home');
+      activeView.style.display = '';
+      loadMatches();
+    }
+
+    if (activeView) {
+      requestAnimationFrame(() => activeView.classList.add('view-enter'));
+    }
+  };
+
+  if (document.startViewTransition) {
+    document.startViewTransition(applyRoute);
+  } else {
+    applyRoute();
   }
 }
 
 window.addEventListener('hashchange', handleRoute);
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && _costSaveTimer) {
+    clearTimeout(_costSaveTimer);
+    _costSaveTimer = null;
+    saveCost();
+  }
+});
+function applyAppVersion() {
+  const label = `v${APP_VERSION}`;
+  const infoVer = document.getElementById('info-version');
+  const creditVer = document.getElementById('credit-version');
+  if (infoVer) infoVer.textContent = label;
+  if (creditVer) creditVer.textContent = label;
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register(`./sw.js?v=${encodeURIComponent(APP_VERSION)}`).catch(() => {});
+}
+
 window.addEventListener('DOMContentLoaded', () => {
+  applyAppVersion();
+  registerServiceWorker();
   setupEventDelegation();
   setupCheckinInput();
+  initCheckinTabBar();
   initSplash();
   handleRoute();
   setTimeout(() => ensureKnownPlayers(), 400);
+
+  const renameInput = document.getElementById('rename-input');
+  if (renameInput) renameInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); confirmRenamePlayer(); }
+  });
+
+  // Native <dialog> handles Escape via 'cancel' event; add backdrop click-to-close
+  document.querySelectorAll('dialog.modal-dialog').forEach(dialog => {
+    dialog.addEventListener('click', e => {
+      if (e.target === dialog) dialog.close();
+    });
+  });
+
+  // Accent color picker
+  const accentPicker = document.getElementById('accent-picker');
+  if (accentPicker) {
+    accentPicker.addEventListener('click', e => {
+      const swatch = e.target.closest('.accent-swatch');
+      if (!swatch) return;
+      accentPicker.querySelectorAll('.accent-swatch').forEach(s => s.classList.remove('active'));
+      swatch.classList.add('active');
+    });
+  }
+
+  // Long-press to toggle paid (600ms hold)
+  let _lpTimer = null;
+  document.addEventListener('pointerdown', e => {
+    const item = e.target.closest('.player-item');
+    if (!item || item.dataset.canToggle !== 'true') return;
+    if (e.target.closest('.player-remove, .player-amount-input, .player-name-editable')) return;
+    _lpTimer = setTimeout(() => {
+      _lpTimer = null;
+      haptic(HAPTIC.confirm);
+      const name = item.dataset.playerName;
+      const newPaid = item.dataset.paid !== 'true';
+      togglePaid(item, name, newPaid);
+    }, 600);
+  });
+  document.addEventListener('pointerup', () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } });
+  document.addEventListener('pointercancel', () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } });
+  document.addEventListener('pointermove', e => {
+    if (_lpTimer && (Math.abs(e.movementX) > 3 || Math.abs(e.movementY) > 3)) {
+      clearTimeout(_lpTimer); _lpTimer = null;
+    }
+  });
 });
 
 // --- Event Delegation (replaces inline onclick for security) ---
@@ -292,6 +425,12 @@ function setupEventDelegation() {
   const playerList = document.getElementById('player-list');
   if (playerList) {
     playerList.addEventListener('click', (e) => {
+      const nameSpan = e.target.closest('.player-name-editable');
+      if (nameSpan && nameSpan.dataset.renameName) {
+        openRenameModal(nameSpan.dataset.renameName, nameSpan.dataset.renameId || '');
+        return;
+      }
+
       const item = e.target.closest('.player-item');
       if (!item) return;
 
@@ -341,6 +480,19 @@ function setupEventDelegation() {
         navigate(buildMatchHash(card.dataset.matchId));
       }
     });
+  }
+
+  const statsWrap = document.getElementById('stats-table-wrap');
+  if (statsWrap) {
+    statsWrap.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-rename-name]');
+      if (btn) openRenameModal(btn.dataset.renameName, btn.dataset.renameId || '');
+    });
+  }
+
+  const pickerList = document.getElementById('picker-list');
+  if (pickerList) {
+    pickerList.addEventListener('click', handlePickerListClick);
   }
 }
 
@@ -465,6 +617,7 @@ async function ensureKnownPlayers(force = false) {
     if (data.players && Array.isArray(data.players)) {
       _knownPlayers = mergePlayerStats(data.players);
     }
+    refreshOpenPickerModal();
   })();
 
   try {
@@ -478,16 +631,18 @@ async function fetchKnownPlayers(force = false) {
   return ensureKnownPlayers(force);
 }
 
+function normalizePlayerKey(name) {
+  return (name || '').toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim();
+}
+
 function addKnownPlayerName(name) {
-  const key = name.toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim();
-  const existing = _knownPlayers.find(p =>
-    p.name.toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim() === key
-  );
+  const key = normalizePlayerKey(name);
+  const existing = _knownPlayers.find(p => normalizePlayerKey(p.name) === key);
   if (existing) {
     existing.matches += 1;
     return;
   }
-  _knownPlayers.push({ name, matches: 1, totalOwed: 0, totalPaid: 0, outstanding: 0 });
+  _knownPlayers.push({ name, playerId: '', matches: 1, totalOwed: 0, totalPaid: 0, outstanding: 0 });
 }
 
 // --- Match List ---
@@ -510,15 +665,17 @@ async function loadMatches(force = false) {
   const gen = _loadGeneration;
   const listEl = document.getElementById('match-list');
   const emptyEl = document.getElementById('no-matches');
+  const hasCache = !!_matchListCache;
+  const cacheFresh = hasCache && (Date.now() - _matchListCacheTime < MATCH_LIST_CACHE_MS);
 
-  const cacheFresh = _matchListCache && (Date.now() - _matchListCacheTime < MATCH_LIST_CACHE_MS);
-  if (!force && cacheFresh) {
+  if (hasCache) {
     renderMatchList(_matchListCache, listEl, emptyEl);
-    return;
+  } else {
+    listEl.innerHTML = skeletonCards(3);
+    emptyEl.style.display = 'none';
   }
 
-  listEl.innerHTML = skeletonCards(3);
-  emptyEl.style.display = 'none';
+  if (!force && cacheFresh) return;
 
   const data = await api('matches');
   if (_loadGeneration !== gen) return;
@@ -526,14 +683,17 @@ async function loadMatches(force = false) {
   if (!data.error && data.matches) {
     _matchListCache = data.matches;
     _matchListCacheTime = Date.now();
-  }
-
-  if (data.error) {
-    listEl.innerHTML = `<div class="empty-state"><p>${escapeHtml(data.error)}</p></div>`;
+    renderMatchList(data.matches, listEl, emptyEl);
     return;
   }
 
-  renderMatchList(data.matches || [], listEl, emptyEl);
+  if (data.error) {
+    if (hasCache) {
+      showToast('Could not refresh match list', 'error');
+      return;
+    }
+    listEl.innerHTML = `<div class="empty-state"><p>${escapeHtml(data.error)}</p></div>`;
+  }
 }
 
 function renderMatchList(matches, listEl, emptyEl) {
@@ -589,8 +749,9 @@ function renderMatchList(matches, listEl, emptyEl) {
         ? `${escapeHtml(m.payTo || '—')} · ${splitLabel} · ${m.paidCount}/${m.playerCount} paid`
         : `${escapeHtml(m.payTo || '—')} · ${m.playerCount} player${m.playerCount !== 1 ? 's' : ''}`;
 
+      const accentAttr = m.accentColor ? ` data-accent="${escapeAttr(m.accentColor)}"` : '';
       html += `
-        <div class="match-card ${stateClass}" data-match-id="${escapeAttr(m.matchId)}" style="animation-delay:${cardIndex * 50}ms">
+        <div class="match-card ${stateClass}" data-match-id="${escapeAttr(m.matchId)}"${accentAttr} style="animation-delay:${cardIndex * 50}ms">
           <div class="match-card-emoji" aria-hidden="true">${allPaid ? '🏆' : hasCost ? (m.paidCount > 0 ? '💸' : '⏳') : isCheckin ? '🏏' : '🆕'}</div>
           <div class="match-card-body">
             <div class="match-card-top">
@@ -626,12 +787,18 @@ function renderMatchList(matches, listEl, emptyEl) {
 }
 
 // --- Create Match ---
+function getSelectedAccent() {
+  const active = document.querySelector('.accent-swatch.active');
+  return active ? active.dataset.color : '';
+}
+
 async function handleCreateMatch(btn) {
   const date = document.getElementById('match-date').value;
   const payTo = document.getElementById('pay-to').value.trim();
   const payToRaw = document.getElementById('pay-upi').value.trim();
   const upfrontCost = Number(document.getElementById('new-match-cost')?.value) || 0;
   const alsoPlaying = document.getElementById('payto-plays')?.checked;
+  const accentColor = getSelectedAccent();
 
   if (!date) return showToast('Please select a date', 'error');
   if (!payTo) return showToast('Please enter who to pay', 'error');
@@ -645,7 +812,7 @@ async function handleCreateMatch(btn) {
   btn.textContent = 'Creating...';
 
   const data = await api('createMatch', {
-    date, payTo, payToUPI,
+    date, payTo, payToUPI, accentColor,
     checkInCollector: !!alsoPlaying
   }, 'POST');
 
@@ -666,6 +833,19 @@ async function handleCreateMatch(btn) {
 
   if (data.writeToken) storeWriteToken(data.matchId, data.writeToken);
   invalidateMatchListCache();
+
+  // Batch-add players picked from past list
+  if (_pickerSelectedNew.size > 0 && data.matchId) {
+    const pickedNames = _knownPlayers
+      .filter(p => _pickerSelectedNew.has(normalizePlayerKey(p.name)))
+      .map(p => p.name);
+    if (pickedNames.length) {
+      await api('checkInBatch', { matchId: data.matchId, playerNames: pickedNames }, 'POST');
+      pickedNames.forEach(addKnownPlayerName);
+    }
+    _pickerSelectedNew.clear();
+  }
+
   showToast('Match created!');
   const adminQuery = data.writeToken ? `?w=${encodeURIComponent(data.writeToken)}` : '';
   navigate(`#/match/${encodeURIComponent(data.matchId)}${adminQuery}`);
@@ -683,7 +863,10 @@ function skeletonPlayers(count) {
 
 async function loadMatch(matchId, options = {}) {
   const silent = options.silent === true;
-  if (!silent) toggleBulkCheckin(false);
+  if (!silent) {
+    switchCheckinTab('type');
+    _pickerSelectedMatch.clear();
+  }
   const gen = _loadGeneration;
   const loading = document.getElementById('match-loading');
   const body = document.getElementById('match-body');
@@ -701,6 +884,8 @@ async function loadMatch(matchId, options = {}) {
     if (!silent) {
       loading.style.display = '';
       loading.textContent = data.error;
+    } else {
+      showToast(data.error, 'error');
     }
     return;
   }
@@ -721,8 +906,16 @@ async function loadMatch(matchId, options = {}) {
 function applyMatchData(match, matchId) {
   _currentMatch = match;
 
+  // Apply per-match accent color
+  const viewMatch = document.getElementById('view-match');
+  if (viewMatch) {
+    if (match.accentColor) viewMatch.setAttribute('data-accent', match.accentColor);
+    else viewMatch.removeAttribute('data-accent');
+  }
+
   _canWrite = !match.requiresWriteToken || hasWriteAccess(matchId);
   applyReadOnlyUI();
+  updateModeBadge();
 
   setPageTitle(formatDate(match.date));
 
@@ -814,8 +1007,12 @@ function applyMatchData(match, matchId) {
       clearTimeout(_costSaveTimer);
       _costSaveTimer = setTimeout(() => saveCost(), 1500);
     };
+    costInput.onblur = () => {
+      if (_costSaveTimer) { clearTimeout(_costSaveTimer); _costSaveTimer = null; saveCost(); }
+    };
   } else {
     costInput.oninput = null;
+    costInput.onblur = null;
   }
 }
 
@@ -895,8 +1092,8 @@ function updateSplitDoneButton(match) {
 }
 
 function applyReadOnlyUI() {
-  const banner = document.getElementById('readonly-banner');
-  if (banner) banner.style.display = _canWrite ? 'none' : '';
+  const pill = document.getElementById('readonly-pill');
+  if (pill) pill.style.display = _canWrite ? 'none' : '';
 
   const costInput = document.getElementById('total-cost');
   if (costInput) {
@@ -1074,7 +1271,7 @@ async function handleSplitModeChange(newMode) {
 
 async function handlePlayerAmountChange(playerName, rawValue, inputEl) {
   if (!_canWrite || !isExactSplit(_currentMatch)) return;
-  const amount = Math.round(Number(rawValue));
+  const amount = Math.round(Number(rawValue) * 100) / 100;
   if (isNaN(amount) || amount < 0) {
     showToast('Invalid amount', 'error');
     if (inputEl && _currentMatch) {
@@ -1131,9 +1328,14 @@ async function saveCost() {
   const cost = Number(document.getElementById('total-cost').value);
   if (!cost || cost <= 0 || !_currentMatch) return;
   if (cost === _lastPersistedCost) return;
+  if (cost === _costBlockedValue) return;
   const splitMode = getSelectedSplitMode();
   const data = await api('lockMatch', { matchId: currentMatchId, totalCost: cost, splitMode }, 'POST');
-  if (data.error) return showToast(data.error, 'error');
+  if (data.error) {
+    _costBlockedValue = cost;
+    return showToast(data.error, 'error');
+  }
+  _costBlockedValue = null;
   _lastPersistedCost = cost;
   if (_currentMatch) {
     _currentMatch.totalCost = cost;
@@ -1192,7 +1394,7 @@ function renderPlayerList(match) {
            data-paid="${p.paid && hasCost}"
            style="animation-delay:${i * 50}ms">
         <div class="player-checkbox ${hasCost ? '' : 'checked-in'}">${hasCost ? (p.paid ? '✓' : '') : '✓'}</div>
-        <span class="player-name" title="${escapeAttr(p.name)}">${escapeHtml(p.name)}</span>
+        <span class="player-name ${getAdminBypass() ? 'player-name-editable' : ''}" title="${getAdminBypass() ? 'Tap to rename' : escapeAttr(p.name)}" data-rename-name="${escapeAttr(p.name)}" data-rename-id="${escapeAttr(p.playerId || '')}">${escapeHtml(p.name)}</span>
         ${amountHtml}
       </div>`;
   }).join('');
@@ -1234,17 +1436,332 @@ function parseBulkNames(text) {
   return names;
 }
 
-function toggleBulkCheckin(forceOpen) {
-  const panel = document.getElementById('bulk-checkin-panel');
-  const btn = document.getElementById('btn-toggle-bulk-checkin');
-  if (!panel || !btn) return;
-  const open = forceOpen === true ? true : forceOpen === false ? false : panel.style.display === 'none';
-  panel.style.display = open ? '' : 'none';
-  btn.textContent = open ? 'Hide bulk paste' : 'Paste multiple names';
-  if (open) {
-    const ta = document.getElementById('bulk-checkin-names');
-    if (ta) setTimeout(() => ta.focus(), 0);
+function toggleBulkCheckin(forceOpen) {}
+
+// --- Check-in Tabs ---
+function switchCheckinTab(tabName) {
+  const bar = document.getElementById('checkin-tab-bar');
+  if (!bar) return;
+  bar.querySelectorAll('.checkin-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+  ['type', 'paste', 'pick'].forEach(id => {
+    const panel = document.getElementById('tab-' + id);
+    if (panel) panel.style.display = id === tabName ? '' : 'none';
+  });
+  if (tabName === 'pick') {
+    ensureKnownPlayers().then(() => renderPickerChips('match'));
   }
+}
+
+function initCheckinTabBar() {
+  const bar = document.getElementById('checkin-tab-bar');
+  if (!bar) return;
+  bar.addEventListener('click', e => {
+    const tab = e.target.closest('.checkin-tab');
+    if (tab) switchCheckinTab(tab.dataset.tab);
+  });
+}
+
+// --- Picker Chips ---
+function renderPickerChips(context) {
+  const isMatch = context === 'match';
+  const container = document.getElementById(isMatch ? 'player-picker-chips' : 'new-match-picker-chips');
+  if (!container) return;
+  const selected = isMatch ? _pickerSelectedMatch : _pickerSelectedNew;
+
+  const currentPlayers = isMatch && _currentMatch
+    ? new Set(_currentMatch.players.map(p => normalizePlayerKey(p.name)))
+    : new Set();
+
+  if (!_knownPlayers.length) {
+    container.innerHTML = '<span class="picker-empty">No past players yet</span>';
+    updatePickerBtn(context);
+    return;
+  }
+
+  const sorted = [..._knownPlayers].sort((a, b) => b.matches - a.matches || a.name.localeCompare(b.name));
+  container.innerHTML = sorted.map(p => {
+    const lower = normalizePlayerKey(p.name);
+    const disabled = currentPlayers.has(lower);
+    const sel = selected.has(lower);
+    const cls = ['picker-chip'];
+    if (disabled) cls.push('chip-disabled');
+    else if (sel) cls.push('chip-selected');
+    return `<button type="button" class="${cls.join(' ')}" data-player="${escapeAttr(p.name)}" data-ctx="${context}"${disabled ? ' disabled' : ''}>${escapeHtml(p.name)}</button>`;
+  }).join('');
+
+  updatePickerBtn(context);
+}
+
+function updatePickerBtn(context) {
+  if (context === 'match') {
+    const btn = document.getElementById('btn-picker-add');
+    if (btn) {
+      const n = _pickerSelectedMatch.size;
+      btn.disabled = n === 0;
+      btn.textContent = n ? `Add ${n} player${n > 1 ? 's' : ''}` : 'Add selected';
+    }
+  } else {
+    const hint = document.getElementById('new-match-picker-count');
+    if (hint) {
+      const n = _pickerSelectedNew.size;
+      hint.textContent = n ? `${n} player${n > 1 ? 's' : ''} selected` : '';
+    }
+  }
+}
+
+function handleChipClick(e) {
+  const chip = e.target.closest('.picker-chip');
+  if (!chip || chip.classList.contains('chip-disabled')) return;
+  const name = chip.dataset.player;
+  const ctx = chip.dataset.ctx;
+  const sel = ctx === 'match' ? _pickerSelectedMatch : _pickerSelectedNew;
+  const key = normalizePlayerKey(name);
+  if (sel.has(key)) sel.delete(key);
+  else sel.add(key);
+  chip.classList.toggle('chip-selected', sel.has(key));
+  updatePickerBtn(ctx);
+}
+
+document.addEventListener('click', e => {
+  if (e.target.closest('.picker-chip')) handleChipClick(e);
+});
+
+async function handlePickerCheckIn() {
+  if (_checkInPending || !_pickerSelectedMatch.size) return;
+  const names = _knownPlayers
+    .filter(p => _pickerSelectedMatch.has(normalizePlayerKey(p.name)))
+    .map(p => p.name);
+  if (!names.length) return;
+
+  _checkInPending = true;
+  const btn = document.getElementById('btn-picker-add');
+  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+
+  const data = await api('checkInBatch', { matchId: currentMatchId, playerNames: names }, 'POST');
+
+  _checkInPending = false;
+
+  if (data.error) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Add selected'; }
+    return showToast(data.error, 'error');
+  }
+
+  _pickerSelectedMatch.clear();
+  _costBlockedValue = null;
+  names.forEach(addKnownPlayerName);
+  await loadMatch(currentMatchId, { silent: true });
+  invalidateMatchListCache();
+  renderPickerChips('match');
+
+  const added = data.added || 0;
+  const skipped = data.skipped || 0;
+  if (added === 0 && skipped > 0) showToast('Everyone was already on the list', 'error');
+  else if (skipped > 0) { haptic(HAPTIC.tick); showToast(`Added ${added} · ${skipped} already on list`); }
+  else { haptic(HAPTIC.tick); showToast(`Added ${added} player${added === 1 ? '' : 's'}!`); }
+}
+
+// --- New Match Picker Modal ---
+let _pickerModalTemp = new Set();
+
+async function openNewMatchPicker() {
+  _pickerModalTemp = new Set(_pickerSelectedNew);
+  const modal = document.getElementById('picker-modal');
+  const search = document.getElementById('picker-search');
+  const list = document.getElementById('picker-list');
+  if (modal && !modal.open) modal.showModal();
+  if (search) search.value = '';
+  if (list) list.innerHTML = '<span class="picker-empty">Loading players…</span>';
+  updatePickerModalBtn();
+  await ensureKnownPlayers();
+  renderPickerModalList();
+  if (search) {
+    setTimeout(() => search.focus(), 50);
+    search.oninput = () => renderPickerModalList(search.value.trim().toLowerCase());
+  }
+}
+
+function closeNewMatchPicker() {
+  const modal = document.getElementById('picker-modal');
+  if (modal && modal.open) modal.close();
+}
+
+function refreshOpenPickerModal() {
+  const modal = document.getElementById('picker-modal');
+  if (!modal?.open) return;
+  const search = document.getElementById('picker-search');
+  renderPickerModalList((search?.value || '').trim().toLowerCase());
+}
+
+function renderPickerModalList(filter = '') {
+  const list = document.getElementById('picker-list');
+  if (!list) return;
+  const sorted = [..._knownPlayers].sort((a, b) => b.matches - a.matches || a.name.localeCompare(b.name));
+  const filtered = filter
+    ? sorted.filter(p => normalizePlayerKey(p.name).includes(filter))
+    : sorted;
+
+  if (!filtered.length) {
+    list.innerHTML = `<span class="picker-empty">${filter ? 'No players match your search' : 'No past players yet'}</span>`;
+    updatePickerModalBtn();
+    return;
+  }
+
+  list.innerHTML = filtered.map(p => {
+    const key = normalizePlayerKey(p.name);
+    const sel = _pickerModalTemp.has(key);
+    return `<div class="picker-list-item ${sel ? 'selected' : ''}" data-player-key="${escapeAttr(key)}" data-player-name="${escapeAttr(p.name)}">
+      <div class="picker-list-check">${sel ? '✓' : ''}</div>
+      <span class="picker-list-name">${escapeHtml(p.name)}</span>
+      <span class="picker-list-meta">${p.matches} game${p.matches !== 1 ? 's' : ''}</span>
+    </div>`;
+  }).join('');
+
+  updatePickerModalBtn();
+}
+
+function updatePickerModalBtn() {
+  const btn = document.getElementById('picker-modal-add');
+  if (!btn) return;
+  const n = _pickerModalTemp.size;
+  btn.disabled = n === 0;
+  btn.textContent = n ? `Add ${n}` : 'Add';
+}
+
+function handlePickerListClick(e) {
+  const item = e.target.closest('.picker-list-item');
+  if (!item) return;
+  const key = item.dataset.playerKey;
+  if (!key) return;
+  if (_pickerModalTemp.has(key)) _pickerModalTemp.delete(key);
+  else _pickerModalTemp.add(key);
+  item.classList.toggle('selected', _pickerModalTemp.has(key));
+  const check = item.querySelector('.picker-list-check');
+  if (check) check.textContent = _pickerModalTemp.has(key) ? '✓' : '';
+  updatePickerModalBtn();
+}
+
+function confirmNewMatchPicker() {
+  _pickerSelectedNew.clear();
+  _pickerModalTemp.forEach(k => _pickerSelectedNew.add(k));
+  closeNewMatchPicker();
+  renderNewMatchPickerTags();
+}
+
+function renderNewMatchPickerTags() {
+  const container = document.getElementById('new-match-picker-tags');
+  if (!container) return;
+  if (!_pickerSelectedNew.size) { container.innerHTML = ''; return; }
+
+  container.innerHTML = [..._pickerSelectedNew].map(key => {
+    const p = _knownPlayers.find(pl => normalizePlayerKey(pl.name) === key);
+    const name = p ? p.name : key;
+    return `<span class="picker-tag">${escapeHtml(name)}<button type="button" class="picker-tag-x" data-key="${escapeAttr(key)}" onclick="removePickerTag(this.dataset.key)">&times;</button></span>`;
+  }).join('');
+}
+
+function removePickerTag(key) {
+  _pickerSelectedNew.delete(key);
+  renderNewMatchPickerTags();
+}
+
+// --- Rename Player Modal ---
+let _renameTarget = { name: '', playerId: '' };
+
+function openRenameModal(name, playerId) {
+  _renameTarget = { name, playerId: playerId || '' };
+  const modal = document.getElementById('rename-modal');
+  const input = document.getElementById('rename-input');
+  const deleteBtn = document.getElementById('rename-delete-btn');
+  
+  input.value = name;
+  
+  if (deleteBtn) {
+    deleteBtn.style.display = (playerId && getAdminBypass()) ? '' : 'none';
+  }
+  
+  if (modal && !modal.open) modal.showModal();
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+
+function closeRenameModal() {
+  const modal = document.getElementById('rename-modal');
+  if (modal && modal.open) modal.close();
+}
+
+async function confirmRenamePlayer() {
+  const input = document.getElementById('rename-input');
+  const newName = input.value.trim();
+  if (!newName) return showToast('Name cannot be empty', 'error');
+  if (newName === _renameTarget.name) return closeRenameModal();
+
+  const btn = document.getElementById('rename-save-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  const token = getAdminBypass() || getAuthToken(currentMatchId);
+  const payload = { action: 'renamePlayer', newName, writeToken: token };
+  if (_renameTarget.playerId) payload.playerId = _renameTarget.playerId;
+  else payload.oldName = _renameTarget.name;
+  if (currentMatchId) payload.matchId = currentMatchId;
+
+  const data = await api('renamePlayer', payload, 'POST');
+
+  btn.disabled = false;
+  btn.textContent = 'Save';
+
+  if (data.error) return showToast(data.error, 'error');
+
+  closeRenameModal();
+  showToast(`Renamed to ${newName}`);
+
+  // Refresh known players and current view
+  await ensureKnownPlayers(true);
+  if (currentMatchId) await loadMatch(currentMatchId, { silent: true });
+}
+
+// --- Delete Player (from roster) ---
+async function handleDeletePlayer(playerId, name) {
+  if (!confirm(`Remove "${name}" from the roster?\nOnly works if they have no match history.`)) return;
+
+  const token = getAdminBypass();
+  if (!token) return showToast('Admin access required', 'error');
+
+  const data = await api('deletePlayer', { playerId, writeToken: token }, 'POST');
+  if (data.error) return showToast(data.error, 'error');
+
+  showToast(`${name} removed from roster`);
+  _knownPlayers = _knownPlayers.filter(p => p.playerId !== playerId);
+  loadStats();
+}
+
+async function deletePlayerFromRenameModal() {
+  if (!_renameTarget.playerId) return showToast('Cannot delete player without ID', 'error');
+  
+  if (!confirm(`Remove "${_renameTarget.name}" from the roster?\nOnly works if they have no match history.`)) return;
+
+  const token = getAdminBypass();
+  if (!token) return showToast('Admin access required', 'error');
+
+  const deleteBtn = document.getElementById('rename-delete-btn');
+  if (deleteBtn) {
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = 'Deleting…';
+  }
+
+  const data = await api('deletePlayer', { playerId: _renameTarget.playerId, writeToken: token }, 'POST');
+
+  if (data.error) {
+    if (deleteBtn) {
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = 'Delete from roster';
+    }
+    return showToast(data.error, 'error');
+  }
+
+  closeRenameModal();
+  showToast(`${_renameTarget.name} removed from roster`);
+  _knownPlayers = _knownPlayers.filter(p => p.playerId !== _renameTarget.playerId);
+  loadStats();
 }
 
 async function handleBulkCheckIn() {
@@ -1269,6 +1786,7 @@ async function handleBulkCheckIn() {
   if (data.error) return showToast(data.error, 'error');
 
   ta.value = '';
+  _costBlockedValue = null;
   names.forEach(addKnownPlayerName);
   await loadMatch(currentMatchId, { silent: true });
   invalidateMatchListCache();
@@ -1281,6 +1799,9 @@ async function handleBulkCheckIn() {
     showToast(`Added ${added} · ${skipped} already on list`);
   } else {
     showToast(`Added ${added} player${added === 1 ? '' : 's'}!`);
+  }
+  if (data.splitMode === 'exact' && data.remaining > 0) {
+    setTimeout(() => showToast(`₹${data.remaining} still unassigned — set amounts`, 'info'), 600);
   }
 }
 
@@ -1303,6 +1824,7 @@ async function handleCheckIn() {
   if (data.error) return showToast(data.error, 'error');
 
   input.value = '';
+  _costBlockedValue = null;
   if (_currentMatch) {
     const key = name.toLowerCase();
     if (!_currentMatch.players.some(p => p.name.toLowerCase() === key)) {
@@ -1320,7 +1842,11 @@ async function handleCheckIn() {
     applyMatchData(_currentMatch, currentMatchId);
     addKnownPlayerName(name);
   }
+  haptic(HAPTIC.tick);
   showToast(`${name} is at the crease!`);
+  if (data.splitMode === 'exact' && data.remaining > 0) {
+    setTimeout(() => showToast(`Set amount for ${name} (₹${data.remaining} unassigned)`, 'info'), 600);
+  }
   invalidateMatchListCache();
 }
 
@@ -1345,7 +1871,19 @@ async function handleRemovePlayer(name) {
 // --- Delete Match ---
 async function handleDeleteMatch() {
   if (!_canWrite) return showToast('View-only link — cannot delete match', 'error');
-  if (!confirm('Delete this match and all player data?\nThis cannot be undone.')) return;
+  let msg = 'Delete this match?\nThis cannot be undone.';
+  if (_currentMatch?.players?.length) {
+    const unpaid = _currentMatch.players.filter(p => !p.paid);
+    const unpaidAmt = unpaid.reduce((s, p) => s + (p.amountOwed || 0), 0);
+    if (unpaid.length > 0 && unpaidAmt > 0) {
+      msg = `⚠ ${unpaid.length} player${unpaid.length > 1 ? 's haven\'t' : ' hasn\'t'} paid yet (₹${unpaidAmt} outstanding).\nDeleting will remove all payment records.\n\nAre you sure?`;
+    } else if (unpaid.length > 0) {
+      msg = `${unpaid.length} player${unpaid.length > 1 ? 's' : ''} checked in.\nDeleting will remove all records.\n\nAre you sure?`;
+    } else {
+      msg = 'All payments settled.\nDelete this match?';
+    }
+  }
+  if (!confirm(msg)) return;
 
   const token = getAuthToken(currentMatchId);
   if (_currentMatch?.requiresWriteToken && !token) {
@@ -1374,14 +1912,18 @@ async function handleDeleteMatch() {
 async function togglePaid(el, playerName, paid) {
   if (_markPaidPending.has(playerName)) return;
   _markPaidPending.add(playerName);
-  el.style.pointerEvents = 'none';
-  el.style.opacity = '0.5';
-  const data = await api('markPaid', { matchId: currentMatchId, playerName, paid }, 'POST');
+  el.classList.add('settling');
+  const params = { matchId: currentMatchId, playerName, paid };
+  if (!paid) {
+    const token = getAdminBypass() || getAuthToken(currentMatchId);
+    if (token) params.writeToken = token;
+  }
+  const data = await api('markPaid', params, 'POST');
   _markPaidPending.delete(playerName);
-  el.style.pointerEvents = '';
-  el.style.opacity = '';
+  el.classList.remove('settling');
   if (data.error) return showToast(data.error, 'error');
 
+  haptic(HAPTIC.confirm);
   el.classList.add('flash');
   setTimeout(() => el.classList.remove('flash'), 400);
 
@@ -1399,11 +1941,11 @@ async function togglePaid(el, playerName, paid) {
     invalidateMatchListCache();
   }
 
-  // Check if all paid -> confetti!
   if (_currentMatch && _currentMatch.totalCost > 0) {
     const allPaid = _currentMatch.players.length > 0 &&
       _currentMatch.players.every(p => p.paid);
     if (allPaid && paid) {
+      haptic(HAPTIC.success);
       showToast('All out! Every player has paid!');
       fireConfetti();
     }
@@ -1454,11 +1996,12 @@ async function loadStats() {
 function mergePlayerStats(players) {
   const map = {};
   players.forEach(p => {
-    const key = p.name.toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim();
+    const key = p.playerId || p.name.toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim();
     if (!map[key]) {
       map[key] = { ...p };
       return;
     }
+    if (p.playerId && !map[key].playerId) map[key].playerId = p.playerId;
     map[key].matches += p.matches;
     map[key].totalOwed += p.totalOwed;
     map[key].totalPaid += p.totalPaid;
@@ -1469,10 +2012,15 @@ function mergePlayerStats(players) {
 
 function renderStatCard(p, index = 0) {
   const dueClass = p.outstanding > 0 ? 'due-positive' : 'due-zero';
+  const isAdmin = !!getAdminBypass();
+  const adminHtml = isAdmin ? `
+        <div class="stat-card-actions">
+          <button type="button" class="stat-action-btn" title="Rename" data-rename-name="${escapeAttr(p.name)}" data-rename-id="${escapeAttr(p.playerId || '')}">✎</button>
+        </div>` : '';
   return `
     <div class="stat-card" style="animation-delay:${index * 40}ms">
       <div class="stat-card-top">
-        <span class="stat-name">${escapeHtml(p.name)}</span>
+        <span class="stat-name">${escapeHtml(p.name)}</span>${adminHtml}
         <span class="stat-games">${p.matches} game${p.matches !== 1 ? 's' : ''}</span>
       </div>
       <div class="stat-card-nums">
@@ -1575,23 +2123,27 @@ function buildShareContent(match) {
 
 function openInfoModal() {
   const modal = document.getElementById('info-modal');
-  if (modal) modal.style.display = '';
+  if (modal && !modal.open) modal.showModal();
 }
 
 function closeInfoModal() {
   const modal = document.getElementById('info-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal && modal.open) modal.close();
 }
 
 function openShareMenu() {
   if (!_currentMatch) return;
   const modal = document.getElementById('share-modal');
-  if (modal) modal.style.display = '';
+  if (modal && !modal.open) modal.showModal();
+  const adminBtn = document.getElementById('share-btn-admin');
+  if (adminBtn) {
+    adminBtn.style.display = hasWriteAccess(currentMatchId) ? '' : 'none';
+  }
 }
 
 function closeShareMenu() {
   const modal = document.getElementById('share-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal && modal.open) modal.close();
 }
 
 async function copyMatchLink() {
@@ -1601,6 +2153,21 @@ async function copyMatchLink() {
     await navigator.clipboard.writeText(url);
     closeShareMenu();
     showToast('Link copied!');
+  } catch (e) {
+    showToast('Could not copy link', 'error');
+  }
+}
+
+async function copyAdminLink() {
+  if (!_currentMatch) return;
+  const base = window.location.origin + window.location.pathname;
+  const token = getAuthToken(currentMatchId);
+  if (!token) return showToast('No admin token available', 'error');
+  const url = `${base}#/match/${encodeURIComponent(_currentMatch.matchId)}?w=${encodeURIComponent(token)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    closeShareMenu();
+    showToast('Admin link copied — keep it safe!');
   } catch (e) {
     showToast('Could not copy link', 'error');
   }

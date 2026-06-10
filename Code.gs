@@ -15,7 +15,7 @@
 
 const MAX_NAME_LEN = 100;
 const MAX_FIELD_LEN = 200;
-const WRITE_TOKEN_LEN = 16;
+const WRITE_TOKEN_LEN = 32;
 
 // Set your Sheet ID here in the Apps Script editor ONLY — leave '' in the public git repo.
 // Example: 'YOUR_SHEET_ID_FROM_THE_SHEET_URL'
@@ -91,6 +91,13 @@ function getAdminBypassToken() {
   return '';
 }
 
+function validateAdmin(token) {
+  if (!token) return { valid: false };
+  var bypass = getAdminBypassToken();
+  if (!bypass) return { valid: false };
+  return { valid: token.toString().trim() === bypass };
+}
+
 /** Run once from editor — stores EDITOR_ADMIN_BYPASS in Script Properties. */
 function configureAdminBypass() {
   if (!EDITOR_ADMIN_BYPASS || !EDITOR_ADMIN_BYPASS.trim()) {
@@ -100,7 +107,7 @@ function configureAdminBypass() {
 }
 
 function generateWriteToken() {
-  return Utilities.getUuid().replace(/-/g, '').substring(0, WRITE_TOKEN_LEN);
+  return Utilities.getUuid().replace(/-/g, '');
 }
 
 function findMatchRow(matchId, matchData) {
@@ -261,6 +268,18 @@ function doPost(e) {
       case 'deleteMatch':
         result = deleteMatch(body);
         break;
+      case 'renamePlayer':
+        result = renamePlayer(body);
+        break;
+      case 'deletePlayer':
+        result = deletePlayer(body);
+        break;
+      case 'validateAdmin':
+        result = validateAdmin(body.token);
+        break;
+      case 'purgeTestData':
+        result = purgeTestData(body);
+        break;
       default:
         result = { error: 'Unknown action: ' + action };
     }
@@ -286,24 +305,39 @@ function formatDateStr(val) {
 
 function createMatch(body) {
   const sheet = getSheet('Matches');
-  const matchId = generateId();
   const date = sanitize(body.date || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'), 20);
   const payTo = sanitize(body.payTo, MAX_FIELD_LEN);
   const payToUPI = sanitize(body.payToUPI, MAX_FIELD_LEN);
   if (!payTo) return { error: 'payTo is required' };
 
-  var writeToken = generateWriteToken();
-  // Columns: ... | WriteToken | SplitMode
-  sheet.appendRow([matchId, date, '', 0, 0, 0, payTo, payToUPI, 'checkin', writeToken, 'equal']);
-  invalidateSheetData('Matches');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    var matchId;
+    var matchData = getSheetData('Matches');
+    var existingIds = {};
+    for (var i = 1; i < matchData.length; i++) existingIds[matchData[i][0]] = true;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      var candidate = generateId();
+      if (!existingIds[candidate]) { matchId = candidate; break; }
+    }
+    if (!matchId) matchId = generateId() + generateId();
 
-  var result = { success: true, matchId: matchId, writeToken: writeToken };
-  if (body.checkInCollector && payTo) {
-    var ci = checkIn({ matchId: matchId, playerName: payTo }, { noLock: true });
-    if (ci.error) result.checkInError = ci.error;
-    else result.checkIn = ci;
+    var writeToken = generateWriteToken();
+    var accentColor = sanitize(body.accentColor || '', 20);
+    sheet.appendRow([matchId, date, '', 0, 0, 0, payTo, payToUPI, 'checkin', writeToken, 'equal', accentColor]);
+    invalidateSheetData('Matches');
+
+    var result = { success: true, matchId: matchId, writeToken: writeToken };
+    if (body.checkInCollector && payTo) {
+      var ci = checkIn({ matchId: matchId, playerName: payTo }, { noLock: true });
+      if (ci.error) result.checkInError = ci.error;
+      else result.checkIn = ci;
+    }
+    return result;
+  } finally {
+    lock.releaseLock();
   }
-  return result;
 }
 
 function getMatches() {
@@ -332,13 +366,17 @@ function getMatches() {
       status: row[8],
       paidCount: stats.paidCount,
       paidAmount: stats.paidAmount,
-      splitMode: normalizeSplitMode((row[10] || '').toString())
+      splitMode: normalizeSplitMode((row[10] || '').toString()),
+      accentColor: (row[11] || '').toString()
     });
   }
 
   // Sort newest first
   matches.sort(function(a, b) {
-    return new Date(b.date) - new Date(a.date);
+    var da = new Date(a.date), db = new Date(b.date);
+    if (isNaN(da)) da = new Date(0);
+    if (isNaN(db)) db = new Date(0);
+    return db - da;
   });
 
   return { matches: matches };
@@ -362,7 +400,8 @@ function getMatch(matchId) {
     payToUPI: row[7],
     status: row[8],
     requiresWriteToken: true,
-    splitMode: normalizeSplitMode((row[10] || '').toString())
+    splitMode: normalizeSplitMode((row[10] || '').toString()),
+    accentColor: (row[11] || '').toString()
   };
 
   const paymentData = getSheetData('Payments');
@@ -816,13 +855,14 @@ function setPlayerAmount(body) {
 
   for (let j = 1; j < paymentData.length; j++) {
     if (paymentData[j][0] === matchId && paymentData[j][1].toString().toLowerCase() === playerName.toLowerCase()) {
-      paymentSheet.getRange(j + 1, 4).setValue(Math.round(amountOwed));
+      var rounded = Math.round(amountOwed * 100) / 100;
+      paymentSheet.getRange(j + 1, 4).setValue(rounded);
       invalidateSheetData('Payments');
       var assigned = sumAssignedAmounts(matchId);
       return {
         success: true,
         playerName: playerName,
-        amountOwed: Math.round(amountOwed),
+        amountOwed: rounded,
         assigned: assigned,
         remaining: matchInfo.totalCost - assigned,
         totalCost: matchInfo.totalCost,
@@ -843,7 +883,17 @@ function markPaid(body) {
 
   if (!matchId || !playerName) return { error: 'Missing matchId or playerName' };
 
-  // No write token — players mark themselves paid from the shared link
+  // TRUST MODEL: No write token required for marking paid.
+  // Players mark themselves paid from the shared link (WhatsApp group).
+  // This means anyone with the link CAN mark another player as paid.
+  // Acceptable trade-off for a friends-based cricket group app.
+  //
+  // RESTRICTION: Un-marking (paid -> unpaid) requires write token / admin.
+  // This prevents griefing while keeping the open-mark-paid flow.
+  if (!paid) {
+    var tokenErr = requireWriteToken(body);
+    if (tokenErr) return { error: 'Only match admin can un-mark a payment' };
+  }
 
   const paymentSheet = getSheetCached('Payments');
   const paymentData = getSheetData('Payments');
@@ -905,43 +955,191 @@ function deleteMatch(body) {
 // --- Player Stats ---
 
 function getPlayers() {
+  const playerData = getSheetData('Players');
   const paymentData = getSheetData('Payments');
 
-  const stats = {};
+  // Build roster from Players sheet (source of truth)
+  const roster = {};
+  for (let i = 1; i < playerData.length; i++) {
+    const pid = playerData[i][0].toString();
+    const name = playerData[i][1].toString();
+    if (!pid || !name) continue;
+    roster[pid] = { playerId: pid, name: name, matches: 0, totalOwed: 0, totalPaid: 0, outstanding: 0 };
+  }
 
+  // Enrich with stats from Payments sheet
   for (let j = 1; j < paymentData.length; j++) {
+    const pid = (paymentData[j][2] || '').toString();
     const name = paymentData[j][1].toString();
-    if (!name) continue; // skip rows with blank player name
-    const nameLower = name.toLowerCase();
+    if (!name) continue;
     const amountOwed = Number(paymentData[j][3]) || 0;
     const paid = paymentData[j][4] === true || paymentData[j][4] === 'TRUE';
 
-    if (!stats[nameLower]) {
-      stats[nameLower] = { name: name, matches: 0, totalOwed: 0, totalPaid: 0 };
-    }
-    stats[nameLower].matches++;
-    stats[nameLower].totalOwed += amountOwed;
-    if (paid) {
-      stats[nameLower].totalPaid += amountOwed;
+    if (pid && roster[pid]) {
+      roster[pid].matches++;
+      roster[pid].totalOwed += amountOwed;
+      if (paid) roster[pid].totalPaid += amountOwed;
+      if (name && roster[pid].name !== name) roster[pid].name = name;
+    } else {
+      // Payment row without a Players-sheet entry (legacy data)
+      const nameLower = name.toLowerCase();
+      const fallbackKey = '_name_' + nameLower;
+      if (!roster[fallbackKey]) {
+        roster[fallbackKey] = { playerId: '', name: name, matches: 0, totalOwed: 0, totalPaid: 0, outstanding: 0 };
+      }
+      roster[fallbackKey].matches++;
+      roster[fallbackKey].totalOwed += amountOwed;
+      if (paid) roster[fallbackKey].totalPaid += amountOwed;
     }
   }
 
-  const players = Object.keys(stats).map(function(key) {
-    var p = stats[key];
+  const players = Object.values(roster).map(function(p) {
     p.outstanding = p.totalOwed - p.totalPaid;
     return p;
   });
 
-  players.sort(function(a, b) { return b.matches - a.matches; });
+  players.sort(function(a, b) { return b.matches - a.matches || a.name.localeCompare(b.name); });
 
   return { players: players };
+}
+
+// --- Rename Player ---
+
+function renamePlayer(body) {
+  const playerId = (body.playerId || '').toString().trim();
+  const newName = sanitize(body.newName, MAX_NAME_LEN);
+
+  if (!newName) return { error: 'New name is required' };
+
+  var bypass = getAdminBypassToken();
+  var token = (body.writeToken || body.token || '').toString().trim();
+  if (!bypass || token !== bypass) {
+    return { error: 'Admin access required' };
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    var updated = 0;
+
+    if (playerId) {
+      // Rename by playerId in Players sheet
+      var playerSheet = getSheetCached('Players');
+      var playerData = getSheetData('Players');
+      var playerFound = false;
+      for (var i = 1; i < playerData.length; i++) {
+        if (playerData[i][0].toString() === playerId) {
+          playerSheet.getRange(i + 1, 2).setValue(newName);
+          playerFound = true;
+          break;
+        }
+      }
+      if (!playerFound) return { error: 'Player not found' };
+      invalidateSheetData('Players');
+
+      // Update all Payments rows that reference this playerId
+      var paymentSheet = getSheetCached('Payments');
+      var paymentData = getSheetData('Payments');
+      for (var j = 1; j < paymentData.length; j++) {
+        if ((paymentData[j][2] || '').toString() === playerId) {
+          paymentSheet.getRange(j + 1, 2).setValue(newName);
+          updated++;
+        }
+      }
+      invalidateSheetData('Payments');
+    } else if (body.oldName) {
+      // Fallback: rename by name (for legacy players without IDs)
+      var oldName = sanitize(body.oldName, MAX_NAME_LEN);
+      var oldLower = oldName.toLowerCase();
+
+      var paymentSheet2 = getSheetCached('Payments');
+      var paymentData2 = getSheetData('Payments');
+      for (var k = 1; k < paymentData2.length; k++) {
+        if (paymentData2[k][1].toString().toLowerCase() === oldLower) {
+          paymentSheet2.getRange(k + 1, 2).setValue(newName);
+          updated++;
+        }
+      }
+      invalidateSheetData('Payments');
+
+      var playerSheet2 = getSheetCached('Players');
+      var playerData2 = getSheetData('Players');
+      for (var m = 1; m < playerData2.length; m++) {
+        if (playerData2[m][1].toString().toLowerCase() === oldLower) {
+          playerSheet2.getRange(m + 1, 2).setValue(newName);
+          break;
+        }
+      }
+      invalidateSheetData('Players');
+    } else {
+      return { error: 'playerId or oldName is required' };
+    }
+
+    return { success: true, updated: updated };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// --- Delete Player ---
+
+function deletePlayer(body) {
+  const playerId = (body.playerId || '').toString().trim();
+  if (!playerId) return { error: 'playerId is required' };
+
+  var bypass = getAdminBypassToken();
+  var token = (body.writeToken || body.token || '').toString().trim();
+  if (!bypass || token !== bypass) return { error: 'Admin access required' };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    var playerSheet = getSheetCached('Players');
+    var playerData = getSheetData('Players');
+    var playerNameLower = '';
+    for (var i = 1; i < playerData.length; i++) {
+      if (playerData[i][0].toString() === playerId) {
+        playerNameLower = (playerData[i][1] || '').toString().toLowerCase();
+        break;
+      }
+    }
+
+    var paymentData = getSheetData('Payments');
+    for (var j = 1; j < paymentData.length; j++) {
+      var payPid = (paymentData[j][2] || '').toString();
+      if (payPid === playerId) {
+        return { error: 'Player has match history — remove from individual matches first' };
+      }
+      if (playerNameLower && !payPid &&
+          paymentData[j][1].toString().toLowerCase() === playerNameLower) {
+        return { error: 'Player has match history — remove from individual matches first' };
+      }
+    }
+
+    var deleted = false;
+    for (var k = 1; k < playerData.length; k++) {
+      if (playerData[k][0].toString() === playerId) {
+        playerSheet.deleteRow(k + 1);
+        invalidateSheetData('Players');
+        deleted = true;
+        break;
+      }
+    }
+    if (!deleted) return { error: 'Player not found' };
+    return { success: true };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // --- CricHeroes Scraping (Optional) ---
 
 function cleanCricHeroesName(name) {
   if (!name) return '';
-  return name.toString().replace(/\s+/g, ' ').trim();
+  var s = name.toString();
+  s = s.replace(/&#(\d+);/g, function(_, code) { return String.fromCharCode(Number(code)); });
+  s = s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'");
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 function encodeUrlParens(urlStr) {
@@ -1120,6 +1318,130 @@ function scrapePlayerNames(url) {
   return { players: players, source: 'html', htmlLength: html.length };
 }
 
+// --- Purge integration-test data (admin API — called by npm test / npm run test:cleanup) ---
+
+function requireAdminToken(body) {
+  var bypass = getAdminBypassToken();
+  var token = (body.writeToken || body.token || '').toString().trim();
+  if (!bypass || token !== bypass) return 'Admin access required';
+  return null;
+}
+
+function isTestPayTo(payTo) {
+  var s = (payTo || '').toString().trim();
+  if (!s) return false;
+  var testPayTos = {
+    'Admin': true, 'Player2': true, 'AutoAdmin': true, 'DupTest': true,
+    'RenameAdmin': true, 'DelAdmin': true, 'UnmarkAdmin': true, 'Collector': true,
+    'RoundAdmin': true, 'BatchAdmin': true, 'ExactAdmin': true, 'OwnerA': true,
+    'OwnerB': true, 'TokenTest': true, 'Test': true, 'X': true, 'BypassTest': true
+  };
+  if (testPayTos[s]) return true;
+  if (s.charAt(0) === '=') return true;
+  if (s.charAt(0) === "'" && s.length > 1 && s.charAt(1) === '=') return true;
+  return false;
+}
+
+function isTestPlayerName(name) {
+  var n = (name || '').toString().trim();
+  if (!n) return false;
+  var prefixes = [
+    'Player1', 'Player2', 'Player3', 'Player4', 'Player5',
+    'TempPlayer', 'Solo', 'Early1', 'Early2', 'LatePlayer',
+    'AutoAdmin', 'DupTest', 'PlayerDup', 'BatchA', 'BatchB',
+    'BatchPlayer', 'Admin', 'TokenTest', 'ExactAdmin',
+    'RenameMe', 'RenamedPlayer', 'RenameAdmin',
+    'DeleteMe', 'DelAdmin', 'UnmarkAdmin', 'UnmarkPlayer',
+    'OwnerA', 'OwnerB', 'Collector', 'RoundAdmin', 'RoundA', 'RoundB',
+    'BatchAdmin', 'Alice', 'Bob', 'Carol', 'Test', 'P1',
+    'A', 'B', 'C', 'D'
+  ];
+  for (var i = 0; i < prefixes.length; i++) {
+    var pre = prefixes[i];
+    if (n === pre || n.indexOf(pre + ' ') === 0) return true;
+  }
+  return false;
+}
+
+function playerHasPaymentHistory(playerId, playerNameLower, paymentData) {
+  for (var j = 1; j < paymentData.length; j++) {
+    var payPid = (paymentData[j][2] || '').toString();
+    if (payPid && payPid === playerId) return true;
+    if (playerNameLower && !payPid &&
+        paymentData[j][1].toString().toLowerCase() === playerNameLower) return true;
+  }
+  return false;
+}
+
+function purgeTestData(body) {
+  var adminErr = requireAdminToken(body);
+  if (adminErr) return { error: adminErr };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var matchSheet = getSheetCached('Matches');
+    var matchData = getSheetData('Matches');
+    var idsToDelete = {};
+    var keptMatches = [];
+    var matchesDeleted = 0;
+
+    for (var i = matchData.length - 1; i >= 1; i--) {
+      var row = matchData[i];
+      if (isTestPayTo(row[6])) {
+        idsToDelete[row[0]] = true;
+        matchSheet.deleteRow(i + 1);
+        matchesDeleted++;
+      } else {
+        keptMatches.push({
+          matchId: row[0],
+          date: formatDateStr(row[1]),
+          payTo: row[6]
+        });
+      }
+    }
+    invalidateSheetData('Matches');
+
+    var paymentsDeleted = 0;
+    if (matchesDeleted > 0) {
+      var paymentSheet = getSheetCached('Payments');
+      var paymentData = getSheetData('Payments');
+      for (var p = paymentData.length - 1; p >= 1; p--) {
+        if (idsToDelete[paymentData[p][0]]) {
+          paymentSheet.deleteRow(p + 1);
+          paymentsDeleted++;
+        }
+      }
+      invalidateSheetData('Payments');
+    }
+
+    var playersDeleted = 0;
+    var playerSheet = getSheetCached('Players');
+    var playerData = getSheetData('Players');
+    var paymentData2 = getSheetData('Payments');
+    for (var m = playerData.length - 1; m >= 1; m--) {
+      var playerId = playerData[m][0].toString();
+      var playerName = playerData[m][1].toString();
+      if (!isTestPlayerName(playerName)) continue;
+      var nameLower = playerName.toLowerCase();
+      if (playerHasPaymentHistory(playerId, nameLower, paymentData2)) continue;
+      playerSheet.deleteRow(m + 1);
+      playersDeleted++;
+    }
+    if (playersDeleted > 0) invalidateSheetData('Players');
+
+    return {
+      success: true,
+      matchesDeleted: matchesDeleted,
+      paymentsDeleted: paymentsDeleted,
+      playersDeleted: playersDeleted,
+      keptMatches: keptMatches
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // --- Data Reset Helper (run once from Apps Script editor to wipe test data) ---
 
 function resetAllData() {
@@ -1266,4 +1588,76 @@ function backfillWriteTokens() {
 
   Logger.log('backfillWriteTokens: filled ' + filled + ' row(s). Re-share admin ?w= links for those matches.');
   return { filled: filled };
+}
+
+/**
+ * One-shot migration: Create Players sheet entries for any player in Payments who doesn't have one yet.
+ * Run from the Apps Script editor to backfill existing players.
+ */
+function backfillPlayerIds() {
+  var ss = getSpreadsheet();
+  var playersSheet = ss.getSheetByName('Players');
+  var paymentsSheet = ss.getSheetByName('Payments');
+  
+  if (!playersSheet || !paymentsSheet) {
+    Logger.log('Players or Payments sheet not found');
+    return { error: 'Sheets not found' };
+  }
+  
+  var playersData = playersSheet.getDataRange().getValues();
+  var paymentsData = paymentsSheet.getDataRange().getValues();
+  
+  // Build map of existing players by name
+  var existingPlayers = {};
+  for (var i = 1; i < playersData.length; i++) {
+    var name = (playersData[i][1] || '').toString();
+    if (name) existingPlayers[name.toLowerCase()] = playersData[i][0].toString();
+  }
+  
+  // Find unique player names from Payments who don't have Players entries
+  var missingPlayers = {};
+  for (var j = 1; j < paymentsData.length; j++) {
+    var name = (paymentsData[j][1] || '').toString();
+    if (!name) continue;
+    var nameLower = name.toLowerCase();
+    if (!existingPlayers[nameLower] && !missingPlayers[nameLower]) {
+      missingPlayers[nameLower] = name;
+    }
+  }
+  
+  // Create Players entries for missing players
+  var created = 0;
+  var playerIdMap = {}; // nameLower -> playerId
+  for (var key in missingPlayers) {
+    var playerName = missingPlayers[key];
+    var playerId = generateId();
+    playersSheet.appendRow([playerId, playerName, '']);
+    playerIdMap[key] = playerId;
+    created++;
+    Logger.log('Created player: ' + playerName + ' -> ' + playerId);
+  }
+  
+  // Update Payments rows to reference the new PlayerIDs
+  var updated = 0;
+  for (var k = 1; k < paymentsData.length; k++) {
+    var pName = (paymentsData[k][1] || '').toString();
+    if (!pName) continue;
+    var pNameLower = pName.toLowerCase();
+    var existingPid = (paymentsData[k][2] || '').toString();
+    
+    if (!existingPid) {
+      // Find the playerId (either from existing or newly created)
+      var pid = existingPlayers[pNameLower] || playerIdMap[pNameLower];
+      if (pid) {
+        paymentsSheet.getRange(k + 1, 3).setValue(pid);
+        updated++;
+      }
+    }
+  }
+  
+  invalidateSheetData('Players');
+  invalidateSheetData('Payments');
+  
+  Logger.log('✅ Created ' + created + ' player(s), updated ' + updated + ' payment row(s)');
+  return { created: created, updated: updated };
 }

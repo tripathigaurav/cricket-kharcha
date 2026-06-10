@@ -1,7 +1,7 @@
 // Run only custom split (exact mode) tests: node test-exact-split.js
 let BASE;
 try {
-  const cfg = require('./config.js');
+  const cfg = require('../config.js');
   BASE = process.env.CRICKET_TEST_API_URL || cfg.CRICKET_TEST_API_URL || cfg.CRICKET_API_URL;
 } catch (e) {
   BASE = process.env.CRICKET_TEST_API_URL || process.env.CRICKET_API_URL || '';
