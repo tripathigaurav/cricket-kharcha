@@ -338,6 +338,13 @@
 
       <!-- Player Stats View -->
       <section id="view-stats" class="view view-section" style="display:none">
+        <div id="stats-add-player" class="stats-add-player">
+          <button type="button" id="btn-add-player-toggle" class="btn btn-sm btn-outline" onclick="toggleAddPlayerForm()">+ Add Player</button>
+          <div id="add-player-form" class="add-player-form" style="display:none">
+            <input type="text" id="add-player-input" placeholder="Player name" maxlength="100" autocomplete="off">
+            <button type="button" id="btn-add-player-submit" class="btn btn-sm btn-primary" onclick="submitAddPlayer()">Add</button>
+          </div>
+        </div>
         <div id="stats-loading" class="loading">Loading</div>
         <div id="stats-table-wrap"></div>
         <div id="no-stats" class="empty-state" style="display:none">

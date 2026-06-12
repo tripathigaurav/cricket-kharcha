@@ -8,6 +8,7 @@
     "test:split": "node test/exact-split.js",
     "test:cricheroes": "node test/cricheroes.js",
     "test:player-link": "node test/player-link.js",
-    "test:cleanup": "node test/cleanup.js"
+    "test:cleanup": "node test/cleanup.js",
+    "test:add-player": "node test/add-player-history.js"
   }
 }

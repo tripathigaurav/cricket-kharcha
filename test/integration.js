@@ -836,6 +836,87 @@ async function run() {
   assert('3 players total', mBatch.match?.players?.length === 3, `got ${mBatch.match?.players?.length}`);
 
   // ══════════════════════════════════════════════════════════
+  // BLOCK X: Add Player to Roster (Pre-register)
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── X1. Add player with empty name rejected');
+  const addEmpty = await post({ action: 'addPlayer', playerName: '' });
+  assert('Empty name rejected', !!addEmpty.error, JSON.stringify(addEmpty));
+
+  const addMissing = await post({ action: 'addPlayer' });
+  assert('Missing name rejected', !!addMissing.error, JSON.stringify(addMissing));
+
+  console.log('\n── X2. Add new player succeeds');
+  const addOk = await post({ action: 'addPlayer', playerName: 'TestPreReg' });
+  assert('addPlayer succeeds', addOk.success === true, JSON.stringify(addOk));
+  assert('Returns playerName', addOk.playerName === 'TestPreReg');
+  assert('Returns playerId', !!addOk.playerId);
+
+  console.log('\n── X3. Duplicate add rejected (same case)');
+  const addDup = await post({ action: 'addPlayer', playerName: 'TestPreReg' });
+  assert('Duplicate rejected', !!addDup.error && addDup.error.includes('already exists'), JSON.stringify(addDup));
+
+  console.log('\n── X4. Duplicate add rejected (different case)');
+  const addDupCase = await post({ action: 'addPlayer', playerName: 'testprereg' });
+  assert('Case-insensitive dup rejected', !!addDupCase.error && addDupCase.error.includes('already exists'), JSON.stringify(addDupCase));
+
+  console.log('\n── X5. Pre-added player appears in getPlayers()');
+  const rosterX = await get('players');
+  const preRegPlayer = rosterX.players?.find(p => p.name === 'TestPreReg');
+  assert('Player in roster', !!preRegPlayer);
+  assert('Has 0 matches', preRegPlayer?.matches === 0, `got ${preRegPlayer?.matches}`);
+  assert('Has 0 outstanding', preRegPlayer?.outstanding === 0, `got ${preRegPlayer?.outstanding}`);
+
+  console.log('\n── X6. Check-in pre-added player — no duplicate in Players sheet');
+  const cPreReg = await post({ action: 'createMatch', date: '2026-06-08', payTo: 'Test', payToUPI: 'test@upi' });
+  createdMatchIds.push(cPreReg.matchId);
+  const ciPreReg = await post({ action: 'checkIn', matchId: cPreReg.matchId, playerName: 'TestPreReg' });
+  assert('Check-in succeeds', ciPreReg.success === true, JSON.stringify(ciPreReg));
+
+  const rosterX2 = await get('players');
+  const preRegEntries = rosterX2.players?.filter(p => p.name === 'TestPreReg');
+  assert('No duplicate in roster', preRegEntries?.length === 1, `got ${preRegEntries?.length} entries`);
+  assert('Now has 1 match', preRegEntries?.[0]?.matches === 1, `got ${preRegEntries?.[0]?.matches}`);
+
+  // ══════════════════════════════════════════════════════════
+  // BLOCK Y: Player History Drill-down
+  // ══════════════════════════════════════════════════════════
+  console.log('\n── Y1. playerHistory with missing ID returns error');
+  const histNoId = await get('playerHistory');
+  assert('Missing ID returns error', !!histNoId.error, JSON.stringify(histNoId));
+
+  console.log('\n── Y2. playerHistory with fake ID returns error');
+  const histFake = await get('playerHistory', { id: 'FAKE_PLAYER_999' });
+  assert('Fake ID returns error', !!histFake.error, JSON.stringify(histFake));
+
+  console.log('\n── Y3. playerHistory for TestPreReg returns match history');
+  const preRegId = preRegEntries?.[0]?.playerId;
+  const histOk = await get('playerHistory', { id: preRegId });
+  assert('Returns playerId', histOk.playerId === preRegId);
+  assert('Returns name', histOk.name === 'TestPreReg');
+  assert('History is array', Array.isArray(histOk.history));
+  assert('Has 1 history entry', histOk.history?.length === 1, `got ${histOk.history?.length}`);
+
+  console.log('\n── Y4. History entry has correct fields');
+  const entry = histOk.history?.[0];
+  assert('Entry has matchId', entry?.matchId === cPreReg.matchId);
+  assert('Entry has date', entry?.date === '2026-06-08');
+  assert('Entry has payTo', entry?.payTo === 'Test');
+  assert('Entry has amount (number)', typeof entry?.amount === 'number');
+  assert('Entry has paid (boolean)', typeof entry?.paid === 'boolean');
+
+  console.log('\n── Y5. Lock match and verify amount in history');
+  await post({ action: 'lockMatch', matchId: cPreReg.matchId, totalCost: 600 });
+  const histAfterLock = await get('playerHistory', { id: preRegId });
+  const entryAfterLock = histAfterLock.history?.find(h => h.matchId === cPreReg.matchId);
+  assert('Amount updated after lock', entryAfterLock?.amount === 600, `got ${entryAfterLock?.amount}`);
+
+  console.log('\n── Y6. Mark paid and verify in history');
+  await postRaw({ action: 'markPaid', matchId: cPreReg.matchId, playerName: 'TestPreReg', paid: true });
+  const histAfterPaid = await get('playerHistory', { id: preRegId });
+  const entryAfterPaid = histAfterPaid.history?.find(h => h.matchId === cPreReg.matchId);
+  assert('paid = true in history', entryAfterPaid?.paid === true, `got ${entryAfterPaid?.paid}`);
+
+  // ══════════════════════════════════════════════════════════
   // SUMMARY
   // ══════════════════════════════════════════════════════════
   const total = passed + failed;

@@ -223,6 +223,9 @@ function doGet(e) {
       case 'players':
         result = getPlayers();
         break;
+      case 'playerHistory':
+        result = getPlayerHistory(e.parameter.id);
+        break;
       case 'scrape':
         result = scrapePlayerNames(e.parameter.url);
         break;
@@ -273,6 +276,9 @@ function doPost(e) {
         break;
       case 'deletePlayer':
         result = deletePlayer(body);
+        break;
+      case 'addPlayer':
+        result = addPlayer(body);
         break;
       case 'validateAdmin':
         result = validateAdmin(body.token);
@@ -1003,6 +1009,58 @@ function getPlayers() {
   return { players: players };
 }
 
+// --- Player History (per-match breakdown) ---
+
+function getPlayerHistory(playerId) {
+  if (!playerId) return { error: 'Missing player ID' };
+
+  var playerData = getSheetData('Players');
+  var playerName = '';
+  for (var i = 1; i < playerData.length; i++) {
+    if (playerData[i][0].toString() === playerId) {
+      playerName = playerData[i][1].toString();
+      break;
+    }
+  }
+  if (!playerName) return { error: 'Player not found' };
+
+  var matchData = getSheetData('Matches');
+  var matchMap = {};
+  for (var m = 1; m < matchData.length; m++) {
+    matchMap[matchData[m][0]] = {
+      date: formatDateStr(matchData[m][1]),
+      payTo: matchData[m][6] || '',
+      totalCost: Number(matchData[m][3]) || 0
+    };
+  }
+
+  var paymentData = getSheetData('Payments');
+  var history = [];
+  for (var j = 1; j < paymentData.length; j++) {
+    var pid = (paymentData[j][2] || '').toString();
+    if (pid !== playerId) continue;
+    var matchId = paymentData[j][0];
+    var matchInfo = matchMap[matchId] || {};
+    history.push({
+      matchId: matchId,
+      date: matchInfo.date || '',
+      payTo: matchInfo.payTo || '',
+      amount: Number(paymentData[j][3]) || 0,
+      paid: paymentData[j][4] === true || paymentData[j][4] === 'TRUE',
+      paidTimestamp: paymentData[j][5] || ''
+    });
+  }
+
+  history.sort(function(a, b) {
+    var da = new Date(a.date), db = new Date(b.date);
+    if (isNaN(da)) da = new Date(0);
+    if (isNaN(db)) db = new Date(0);
+    return db - da;
+  });
+
+  return { playerId: playerId, name: playerName, history: history };
+}
+
 // --- Rename Player ---
 
 function renamePlayer(body) {
@@ -1127,6 +1185,31 @@ function deletePlayer(body) {
     }
     if (!deleted) return { error: 'Player not found' };
     return { success: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// --- Add Player (pre-register to roster) ---
+
+function addPlayer(body) {
+  var playerName = sanitize(body.playerName, MAX_NAME_LEN);
+  if (!playerName) return { error: 'Player name is required' };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(8000);
+  try {
+    var sheet = getSheetCached('Players');
+    var data = getSheetData('Players');
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1].toString().toLowerCase() === playerName.toLowerCase()) {
+        return { error: 'Player already exists' };
+      }
+    }
+    var playerId = generateId();
+    sheet.appendRow([playerId, playerName, '']);
+    invalidateSheetData('Players');
+    return { success: true, playerId: playerId, playerName: playerName };
   } finally {
     lock.releaseLock();
   }
@@ -1353,7 +1436,7 @@ function isTestPlayerName(name) {
     'RenameMe', 'RenamedPlayer', 'RenameAdmin',
     'DeleteMe', 'DelAdmin', 'UnmarkAdmin', 'UnmarkPlayer',
     'OwnerA', 'OwnerB', 'Collector', 'RoundAdmin', 'RoundA', 'RoundB',
-    'BatchAdmin', 'Alice', 'Bob', 'Carol', 'Test', 'P1',
+    'BatchAdmin', 'Alice', 'Bob', 'Carol', 'Test', 'TestPreReg', 'P1',
     'A', 'B', 'C', 'D'
   ];
   for (var i = 0; i < prefixes.length; i++) {

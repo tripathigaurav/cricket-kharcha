@@ -1438,6 +1438,48 @@ textarea:focus {
   color: var(--accent);
 }
 
+/* ---------- ADD PLAYER (Stats page) ---------- */
+.stats-add-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.stats-add-player .btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.stats-add-player .btn-outline:hover {
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+.add-player-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+}
+.add-player-form input {
+  flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  color: var(--ink-hi);
+  font-size: 14px;
+  outline: none;
+  transition: border-color var(--t-fast);
+}
+.add-player-form input:focus {
+  border-color: var(--accent);
+}
+
 /* ---------- STATS ---------- */
 .stats-sort-bar {
   display: flex;
@@ -1473,14 +1515,14 @@ textarea:focus {
 .stats-cards {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .stat-card {
   background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: 16px;
+  border-radius: var(--r-md);
+  padding: 10px 12px;
   transition: background var(--t-fast), border-color var(--t-fast);
 }
 .stat-card:hover { background: var(--bg-3); }
@@ -1488,20 +1530,21 @@ textarea:focus {
 .stat-card-top {
   display: flex;
   align-items: center;
-  margin-bottom: 12px;
-  gap: 8px;
+  margin-bottom: 6px;
+  gap: 6px;
 }
 .stat-name {
   flex: 1;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--ink-hi);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .stat-games {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-mid);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
@@ -1510,15 +1553,15 @@ textarea:focus {
 .stat-card-nums {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 6px;
 }
 .stat-num {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 .stat-num-label {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1527,7 +1570,7 @@ textarea:focus {
 .stat-num-val {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--ink-hi);
   letter-spacing: -0.01em;
@@ -1535,6 +1578,88 @@ textarea:focus {
 .paid-val { color: var(--paid); }
 .due-positive { color: var(--due); }
 .due-zero { color: var(--ink-mid); }
+
+/* ---------- STAT CARD EXPAND / HISTORY ---------- */
+.stat-card-expandable { cursor: pointer; }
+.stat-expand-btn {
+  background: none;
+  border: none;
+  color: var(--ink-mid);
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast);
+  flex-shrink: 0;
+}
+.stat-expand-btn:hover {
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+.stat-card-expanded {
+  border-color: var(--accent);
+}
+.stat-card-history {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.history-loading, .history-empty {
+  font-size: 13px;
+  color: var(--ink-mid);
+  padding: 8px 0;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-row {
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+}
+.history-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.history-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-hi);
+}
+.history-payto {
+  font-size: 11px;
+  color: var(--ink-mid);
+}
+.history-row-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.history-amount {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-hi);
+}
+.history-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+}
+.history-paid {
+  color: var(--paid);
+  background: color-mix(in oklch, var(--paid) 12%, transparent);
+}
+.history-unpaid {
+  color: var(--due);
+  background: color-mix(in oklch, var(--due) 12%, transparent);
+}
 
 /* ---------- DELETE MATCH ---------- */
 .btn-delete-match {

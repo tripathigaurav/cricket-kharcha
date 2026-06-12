@@ -382,6 +382,12 @@ window.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') { e.preventDefault(); confirmRenamePlayer(); }
   });
 
+  const addPlayerInput = document.getElementById('add-player-input');
+  if (addPlayerInput) addPlayerInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); submitAddPlayer(); }
+    if (e.key === 'Escape') { e.preventDefault(); toggleAddPlayerForm(); }
+  });
+
   // Native <dialog> handles Escape via 'cancel' event; add backdrop click-to-close
   document.querySelectorAll('dialog.modal-dialog').forEach(dialog => {
     dialog.addEventListener('click', e => {
@@ -488,6 +494,12 @@ function setupEventDelegation() {
   const statsWrap = document.getElementById('stats-table-wrap');
   if (statsWrap) {
     statsWrap.addEventListener('click', (e) => {
+      const expandBtn = e.target.closest('.stat-expand-btn');
+      if (expandBtn) {
+        const card = expandBtn.closest('.stat-card');
+        if (card) togglePlayerHistory(expandBtn.dataset.playerId, card);
+        return;
+      }
       const btn = e.target.closest('[data-rename-name]');
       if (btn) openRenameModal(btn.dataset.renameName, btn.dataset.renameId || '');
     });
@@ -2034,11 +2046,14 @@ function renderStatCard(p, index = 0) {
         <div class="stat-card-actions">
           <button type="button" class="stat-action-btn" title="Rename" data-rename-name="${escapeAttr(p.name)}" data-rename-id="${escapeAttr(p.playerId || '')}">✎</button>
         </div>` : '';
+  const expandable = p.playerId && p.matches > 0;
+  const expandBtn = expandable ? `<button type="button" class="stat-expand-btn" data-player-id="${escapeAttr(p.playerId)}" title="Match history">▶</button>` : '';
   return `
-    <div class="stat-card" style="animation-delay:${index * 40}ms">
+    <div class="stat-card${expandable ? ' stat-card-expandable' : ''}" data-player-id="${escapeAttr(p.playerId || '')}" style="animation-delay:${index * 40}ms">
       <div class="stat-card-top">
         <span class="stat-name">${escapeHtml(p.name)}</span>${adminHtml}
         <span class="stat-games">${p.matches} game${p.matches !== 1 ? 's' : ''}</span>
+        ${expandBtn}
       </div>
       <div class="stat-card-nums">
         <div class="stat-num">
@@ -2054,6 +2069,7 @@ function renderStatCard(p, index = 0) {
           <span class="stat-num-val ${dueClass}">₹${p.outstanding}</span>
         </div>
       </div>
+      <div class="stat-card-history" style="display:none"></div>
     </div>`;
 }
 
@@ -2083,6 +2099,104 @@ function sortStats(key) {
 
   const body = document.getElementById('stats-cards-body');
   if (body) body.innerHTML = players.map((p, i) => renderStatCard(p, i)).join('');
+}
+
+// --- Player History Drill-down ---
+
+const _playerHistoryCache = {};
+
+async function togglePlayerHistory(playerId, card) {
+  if (!playerId || !card) return;
+  const historyEl = card.querySelector('.stat-card-history');
+  const expandBtn = card.querySelector('.stat-expand-btn');
+  if (!historyEl) return;
+
+  const isOpen = historyEl.style.display !== 'none';
+  if (isOpen) {
+    historyEl.style.display = 'none';
+    if (expandBtn) expandBtn.textContent = '▶';
+    card.classList.remove('stat-card-expanded');
+    return;
+  }
+
+  card.classList.add('stat-card-expanded');
+  if (expandBtn) expandBtn.textContent = '▼';
+  historyEl.style.display = '';
+
+  if (_playerHistoryCache[playerId]) {
+    historyEl.innerHTML = renderPlayerHistory(_playerHistoryCache[playerId]);
+    return;
+  }
+
+  historyEl.innerHTML = '<div class="history-loading">Loading match history…</div>';
+  const data = await api('playerHistory', { id: playerId });
+
+  if (data.error) {
+    historyEl.innerHTML = `<div class="history-loading">${escapeHtml(data.error)}</div>`;
+    return;
+  }
+
+  _playerHistoryCache[playerId] = data.history || [];
+  historyEl.innerHTML = renderPlayerHistory(data.history || []);
+}
+
+function renderPlayerHistory(history) {
+  if (!history.length) return '<div class="history-empty">No match history</div>';
+  return '<div class="history-list">' + history.map(h => {
+    const dateStr = h.date ? formatDate(h.date) : 'Unknown date';
+    const paidClass = h.paid ? 'history-paid' : 'history-unpaid';
+    const paidLabel = h.paid ? '✓ Paid' : 'Unpaid';
+    return `<div class="history-row">
+      <div class="history-row-top">
+        <span class="history-date">${escapeHtml(dateStr)}</span>
+        <span class="history-payto">Pay to: ${escapeHtml(h.payTo || '—')}</span>
+      </div>
+      <div class="history-row-bottom">
+        <span class="history-amount">₹${h.amount}</span>
+        <span class="history-status ${paidClass}">${paidLabel}</span>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+// --- Add Player (from Stats page) ---
+
+function toggleAddPlayerForm() {
+  const form = document.getElementById('add-player-form');
+  const btn = document.getElementById('btn-add-player-toggle');
+  if (!form) return;
+  const showing = form.style.display !== 'none';
+  form.style.display = showing ? 'none' : '';
+  btn.textContent = showing ? '+ Add Player' : '− Cancel';
+  if (!showing) {
+    const input = document.getElementById('add-player-input');
+    if (input) { input.value = ''; setTimeout(() => input.focus(), 50); }
+  }
+}
+
+async function submitAddPlayer() {
+  const input = document.getElementById('add-player-input');
+  const btn = document.getElementById('btn-add-player-submit');
+  if (!input || !btn) return;
+
+  const name = input.value.trim();
+  if (!name) return showToast('Enter a player name', 'error');
+
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+
+  const data = await api('addPlayer', { playerName: name }, 'POST');
+
+  btn.disabled = false;
+  btn.textContent = 'Add';
+
+  if (data.error) return showToast(data.error, 'error');
+
+  input.value = '';
+  addKnownPlayerName(data.playerName || name);
+  haptic(HAPTIC.tick);
+  showToast(`${data.playerName || name} added to roster!`);
+  loadStats();
 }
 
 // --- Share (WhatsApp-friendly) ---
